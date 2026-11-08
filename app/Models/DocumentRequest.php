@@ -26,9 +26,10 @@ class DocumentRequest extends Model
 
     public function scopeActive($query)
     {
-        return $query->where('status', 'approved')
-            ->where(function ($q) {
-                $q->whereNull('expired_at')
+        return $query
+            ->where('status', 'approved')
+            ->where(function ($permissionQuery) {
+                $permissionQuery->whereNull('expired_at')
                     ->orWhere('expired_at', '>', now());
             });
     }

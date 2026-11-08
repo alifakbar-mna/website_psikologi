@@ -1,1049 +1,1107 @@
-@extends('layouts.app', ['title' => $document->title . ' - Reader'])
+@extends('layouts.app', [
+    'title' => $document->title.' - Reader',
+])
 
 @section('content')
+    @php
+        $user = auth()->user();
 
-@php
-    $user = Auth::user();
+        $isPreview = request()->routeIs('reports.preview');
 
-    $userName = $user->name ?? 'User';
-    $userEmail = $user->email ?? '';
+        if ($isPreview) {
+            if ($user->permits('review_uploads')) {
+                $backRoute = 'reports.reviews';
+            } elseif ($user->permits('manage_documents')) {
+                $backRoute = 'reports.manage';
+            } else {
+                $backRoute = 'reports.mine';
+            }
+        } else {
+            $backRoute = $user->permits('catalog')
+                ? 'student.catalog'
+                : 'home';
+        }
 
-    $isAdmin = $user->role === 'admin';
+        $hasUnlimitedAccess = $user->permits('read_all')
+            || $isPreview;
 
-    $expiresAt = null;
+        $expiresAt = null;
 
-    if (!$isAdmin) {
-        $permission = \App\Models\TemporaryPermission::where('can_read', true)
-            ->where('expired_at', '>', now())
-            ->where(function ($query) use ($document) {
-                $query->where('document_id', $document->id)
-                    ->orWhereNull('document_id');
-            })
-            ->where(function ($query) use ($user) {
-                $query->where('user_id',$user->id)
-                    ->orWhere('is_all_students', true)
-                    ->orWhere(function ($q) use ($user) {
-                        if (!empty($user->angkatan)) {
-                            $q->where('target_angkatan',$user->angkatan);
-                        }
-                    });
-            })
-            ->orderByDesc('expired_at')
-            ->first();
+        if (!$hasUnlimitedAccess) {
+            $expiresAt = $user->activePermissions()
+                ->where('can_read', true)
+                ->where(function ($query) use ($document) {
+                    $query->where('document_id', $document->id)
+                        ->orWhereNull('document_id');
+                })
+                ->max('expired_at');
+        }
 
-        $expiresAt =$permission?->expired_at;
-    }
+        $expiresAtIso = $expiresAt
+            ? \Carbon\Carbon::parse($expiresAt)->toIso8601String()
+            : null;
 
-    $isLiked =$document->likes
-        ? $document->likes->where('user_id',$user->id)->count() > 0
-        : false;
+        $isLiked = $document->likes
+            ->where('user_id', $user->id)
+            ->isNotEmpty();
 
-    $isBookmarked =$document->bookmarks
-        ? $document->bookmarks->where('user_id',$user->id)->count() > 0
-        : false;
+        $isBookmarked = $document->bookmarks
+            ->where('user_id', $user->id)
+            ->isNotEmpty();
 
-    $pdfUrl = route('pdf.stream', basename($document->pdf_path));
-    
-    $hasDownloadRoute = \Illuminate\Support\Facades\Route::has('pdf.download');
-    $canDownload = $isAdmin || $user->hasDownloadPermission($document->id);
-    $downloadUrl = $canDownload && $hasDownloadRoute ? route('pdf.download', $document->id) : '#';
-@endphp
+        $canInteract = $user->permits('bookmarks')
+            && !$isPreview;
 
-<div class="min-h-screen bg-slate-950 text-white">
+        $pdfUrl = route(
+            'pdf.stream',
+            basename($document->pdf_path)
+        );
 
-    {{-- =========================================================
-         HEADER
-    ========================================================== --}}
-    <div class="border-b border-slate-800 bg-slate-950/95 backdrop-blur-md">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 py-4">
+        $likeUrl = route('document.like', $document->id);
 
-            <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+        $bookmarkUrl = route(
+            'document.bookmark',
+            $document->id
+        );
+    @endphp
 
-                {{-- LEFT --}}
-                <div class="flex items-start gap-3 min-w-0">
+    <style>
+        #case-reader .pdf-page {
+            display: block;
+            background: white;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
+            user-select: none;
+            -webkit-user-select: none;
+        }
 
-                    <a
-                        href="{{ route('student.catalog') }}"
-                        class="flex-shrink-0 mt-1 w-9 h-9 rounded-lg
-                               bg-slate-800 hover:bg-slate-700
-                               border border-slate-700
-                               flex items-center justify-center
-                               transition"
-                        title="Kembali ke katalog"
-                    >
-                        <i data-lucide="arrow-left" class="w-4 h-4"></i>
-                    </a>
+        #case-reader .pdf-page-wrapper {
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            flex-shrink: 0;
+            user-select: none;
+            -webkit-user-select: none;
+        }
 
-                    <div class="min-w-0">
+        @media print {
+            #case-reader {
+                display: none !important;
+            }
+        }
+    </style>
 
-                        <div class="flex flex-wrap items-center gap-2 mb-1">
-
-                            <span class="text-xs text-slate-400">
-                                {{ $document->category->name ?? 'Dokumen' }}
-                            </span>
-
-                            @if($isAdmin ||$user->isDosen())
-
-                                <span
-                                    class="inline-flex items-center gap-1
-                                           px-2 py-1 rounded-md
-                                           bg-emerald-500/10
-                                           border border-emerald-500/20
-                                           text-emerald-400 text-[10px] font-medium"
-                                >
-                                    <i
-                                        data-lucide="shield-check"
-                                        class="w-3 h-3"
-                                    ></i>
-
-                                    Akses Penuh
-                                </span>
-
-                            @else
-
-                                <span
-                                    id="access-badge"
-                                    class="inline-flex items-center gap-1
-                                           px-2 py-1 rounded-md
-                                           bg-amber-500/10
-                                           border border-amber-500/20
-                                           text-amber-400 text-[10px] font-medium"
-                                >
-                                    <i
-                                        data-lucide="clock-3"
-                                        class="w-3 h-3"
-                                    ></i>
-
-                                    <span id="countdown-text">
-                                        Memeriksa akses...
-                                    </span>
-                                </span>
-
-                            @endif
-
-                        </div>
-
-
-                        <h1 class="text-lg sm:text-xl font-semibold text-white truncate">
-                            {{ $document->title }}
-                        </h1>
-
-
-                        <div
-                            class="flex flex-wrap items-center
-                                   gap-x-4 gap-y-1 mt-1
-                                   text-xs text-slate-500"
+    <div
+        id="case-reader"
+        class="bg-slate-950 text-white rounded-2xl overflow-hidden"
+    >
+        <header class="border-b border-slate-800 bg-slate-950">
+            <div class="px-4 sm:px-6 py-4">
+                <div class="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
+                    <div class="flex items-start gap-3 min-w-0">
+                        <a
+                            href="{{ route($backRoute) }}"
+                            title="Kembali ke daftar laporan"
+                            aria-label="Kembali ke daftar laporan"
+                            class="shrink-0 mt-1 w-9 h-9 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 flex items-center justify-center transition"
                         >
+                            <i
+                                data-lucide="arrow-left"
+                                class="w-4 h-4"
+                            ></i>
+                        </a>
 
-                            <span class="flex items-center gap-1">
+                        <div class="min-w-0">
+                            <div class="flex flex-wrap items-center gap-2 mb-2">
+                                <span class="text-xs text-slate-400">
+                                    {{ $document->category->name ?? 'Dokumen' }}
+                                    · {{ $document->case_type }}
+                                </span>
 
-                                <i
-                                    data-lucide="calendar"
-                                    class="w-3 h-3"
-                                ></i>
+                                @if($hasUnlimitedAccess)
+                                    <span class="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px] font-medium">
+                                        <i
+                                            data-lucide="shield-check"
+                                            class="w-3 h-3"
+                                        ></i>
 
-                                {{ $document->tahun }}
+                                        {{ $isPreview ? 'Preview Laporan' : 'Akses Penuh' }}
+                                    </span>
+                                @else
+                                    <span
+                                        id="access-badge"
+                                        class="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-amber-500/10 border border-amber-500/20 text-amber-400 text-[10px] font-medium"
+                                    >
+                                        <i
+                                            data-lucide="clock-3"
+                                            class="w-3 h-3"
+                                        ></i>
 
-                            </span>
+                                        <span id="countdown-text">
+                                            Memeriksa akses…
+                                        </span>
+                                    </span>
+                                @endif
+                            </div>
 
+                            <h1 class="text-lg sm:text-xl font-semibold text-white break-words">
+                                {{ $document->title }}
+                            </h1>
 
-                            @if($document->dosen_pembimbing)
-
-                                <span class="flex items-center gap-1">
-
+                            <div class="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs text-slate-400">
+                                <span class="inline-flex items-center gap-1">
                                     <i
-                                        data-lucide="user-round"
+                                        data-lucide="calendar"
                                         class="w-3 h-3"
                                     ></i>
 
-                                    {{ $document->dosen_pembimbing }}
-
+                                    {{ $document->tahun }}
                                 </span>
 
-                            @endif
+                                @if($document->dosen_pembimbing)
+                                    <span class="inline-flex items-center gap-1">
+                                        <i
+                                            data-lucide="user-round"
+                                            class="w-3 h-3"
+                                        ></i>
 
+                                        {{ $document->dosen_pembimbing }}
+                                    </span>
+                                @endif
+                            </div>
                         </div>
-
                     </div>
 
-                </div>
-
-
-                {{-- RIGHT ACTIONS --}}
-                <div class="flex items-center gap-2">
-
-                    {{-- LIKE --}}
-                    <button
-                        type="button"
-                        id="like-btn"
-                        data-liked="{{ $isLiked ? '1' : '0' }}"
-                        class="flex items-center gap-2 px-3 py-2 rounded-lg
-                               border border-slate-700
-                               bg-slate-900 hover:bg-slate-800
-                               text-slate-300 hover:text-white
-                               transition
-                               disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-
-                        <i
-                            data-lucide="heart"
-                            id="like-icon"
-                            class="w-4 h-4 {{ $isLiked ? 'fill-current text-red-400' : '' }}"
-                        ></i>
-
-
-                        <span id="like-text">
-                            {{ $isLiked ? 'Disukai' : 'Suka' }}
-                        </span>
-
-                    </button>
-
-
-                    {{-- BOOKMARK --}}
-                    <button
-                        type="button"
-                        id="bookmark-btn"
-                        data-bookmarked="{{ $isBookmarked ? '1' : '0' }}"
-                        class="flex items-center gap-2 px-3 py-2 rounded-lg
-                               border border-slate-700
-                               bg-slate-900 hover:bg-slate-800
-                               text-slate-300 hover:text-white
-                               transition
-                               disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-
-                        <i
-                            data-lucide="bookmark"
-                            id="bookmark-icon"
-                            class="w-4 h-4 {{ $isBookmarked ? 'fill-current text-blue-400' : '' }}"
-                        ></i>
-
-
-                        <span id="bookmark-text">
-                            {{ $isBookmarked ? 'Tersimpan' : 'Simpan' }}
-                        </span>
-
-                    </button>
-
-                    {{-- TOMBOL UNDUH / REQUEST DOWNLOAD DOKUMEN --}}
-                    @if($hasDownloadRoute)
-                        @if($canDownload)
-                            <a
-                                href="{{ $downloadUrl }}"
-                                target="_blank"
-                                class="flex items-center gap-2 px-3.5 py-2 rounded-lg
-                                       border border-blue-600/30
-                                       bg-blue-600 hover:bg-blue-500
-                                       text-white font-medium text-xs sm:text-sm
-                                       shadow-lg shadow-blue-600/20
-                                       transition"
-                                title="Unduh Dokumen PDF"
-                            >
-                                <i data-lucide="download" class="w-4 h-4"></i>
-                                <span class="hidden sm:inline">Unduh</span>
-                            </a>
-                        @else
-                            <button
-                                type="button"
-                                onclick="openRequestDownloadModal()"
-                                class="flex items-center gap-2 px-3.5 py-2 rounded-lg
-                                       border border-amber-600/30
-                                       bg-amber-600 hover:bg-amber-500
-                                       text-white font-medium text-xs sm:text-sm
-                                       shadow-lg shadow-amber-600/20
-                                       transition"
-                                title="Request Download Dokumen PDF"
-                            >
-                                <i data-lucide="lock" class="w-4 h-4"></i>
-                                <span class="hidden sm:inline">Request Download</span>
-                            </button>
-                        @endif
-                    @endif
-
-                </div>
-
-            </div>
-
-        </div>
-    </div>
-
-
-    {{-- =========================================================
-         MAIN
-    ========================================================== --}}
-    <main class="max-w-7xl mx-auto px-3 sm:px-6 py-4">
-
-        {{-- =====================================================
-             PDF READER
-        ====================================================== --}}
-        <div
-            id="pdf-container"
-            class="relative w-full
-                   rounded-2xl
-                   border border-slate-800
-                   bg-slate-900
-                   overflow-auto
-                   shadow-2xl"
-            style="height: calc(100vh - 145px);"
-        >
-
-            {{-- =================================================
-                 STICKY TOOLBAR
-            ================================================== --}}
-            <div
-                id="pdf-toolbar"
-                class="sticky top-0 z-[100]
-                       w-full
-                       bg-slate-900/95
-                       backdrop-blur-xl
-                       border-b border-slate-700
-                       shadow-lg"
-            >
-
-                <div
-                    class="flex flex-wrap items-center
-                           justify-between gap-3 p-3"
-                >
-
-                    {{-- PAGE INFO --}}
-                    <div class="flex items-center gap-2">
-
-                        <div
-                            class="flex items-center gap-2
-                                   px-3 py-2 rounded-lg
-                                   bg-slate-800
-                                   border border-slate-700
-                                   text-xs text-slate-300"
+                    <div class="flex items-center gap-2 shrink-0">
+                        <button
+                            type="button"
+                            id="like-btn"
+                            data-liked="{{ $isLiked ? '1' : '0' }}"
+                            @disabled(!$canInteract)
+                            class="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white transition disabled:opacity-50 disabled:cursor-not-allowed"
                         >
+                            <i
+                                data-lucide="heart"
+                                id="like-icon"
+                                class="w-4 h-4 {{ $isLiked ? 'fill-current text-red-400' : '' }}"
+                            ></i>
 
+                            <span id="like-text">
+                                {{ $isLiked ? 'Disukai' : 'Suka' }}
+                            </span>
+                        </button>
+
+                        <button
+                            type="button"
+                            id="bookmark-btn"
+                            data-bookmarked="{{ $isBookmarked ? '1' : '0' }}"
+                            @disabled(!$canInteract)
+                            class="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white transition disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            <i
+                                data-lucide="bookmark"
+                                id="bookmark-icon"
+                                class="w-4 h-4 {{ $isBookmarked ? 'fill-current text-blue-400' : '' }}"
+                            ></i>
+
+                            <span id="bookmark-text">
+                                {{ $isBookmarked ? 'Tersimpan' : 'Simpan' }}
+                            </span>
+                        </button>
+                    </div>
+                </div>
+
+                <p
+                    id="reader-action-message"
+                    role="status"
+                    aria-live="polite"
+                    class="mt-3 text-xs text-amber-300"
+                ></p>
+            </div>
+        </header>
+
+        <div class="p-3 sm:p-5">
+            <div
+                id="pdf-container"
+                class="relative w-full rounded-2xl border border-slate-800 bg-slate-900 overflow-auto shadow-2xl"
+                style="height: 75vh; min-height: 360px;"
+            >
+                <div
+                    id="pdf-toolbar"
+                    class="sticky top-0 z-20 w-full bg-slate-900/95 backdrop-blur-xl border-b border-slate-700 shadow-lg"
+                >
+                    <div class="flex flex-wrap items-center justify-between gap-3 p-3">
+                        <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-300">
                             <i
                                 data-lucide="file-text"
                                 class="w-4 h-4 text-slate-400"
                             ></i>
 
                             <span>
-
                                 Halaman
 
                                 <span
                                     id="current-page"
                                     class="font-semibold text-white"
-                                >
-                                    1
-                                </span>
+                                >1</span>
 
                                 dari
 
                                 <span
                                     id="total-pages"
                                     class="font-semibold text-white"
-                                >
-                                    -
+                                >-</span>
+                            </span>
+                        </div>
+
+                        <div class="flex items-center gap-2">
+                            <button
+                                type="button"
+                                id="zoom-out"
+                                title="Perkecil"
+                                aria-label="Perkecil PDF"
+                                class="w-9 h-9 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 flex items-center justify-center disabled:opacity-40"
+                            >
+                                <i
+                                    data-lucide="zoom-out"
+                                    class="w-4 h-4"
+                                ></i>
+                            </button>
+
+                            <div
+                                id="zoom-level"
+                                class="min-w-[65px] text-center px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-300"
+                            >
+                                100%
+                            </div>
+
+                            <button
+                                type="button"
+                                id="zoom-in"
+                                title="Perbesar"
+                                aria-label="Perbesar PDF"
+                                class="w-9 h-9 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 flex items-center justify-center disabled:opacity-40"
+                            >
+                                <i
+                                    data-lucide="zoom-in"
+                                    class="w-4 h-4"
+                                ></i>
+                            </button>
+
+                            <button
+                                type="button"
+                                id="fit-width"
+                                title="Sesuaikan dengan lebar"
+                                aria-label="Sesuaikan PDF dengan lebar"
+                                class="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs text-slate-300 disabled:opacity-40"
+                            >
+                                <i
+                                    data-lucide="maximize-2"
+                                    class="w-4 h-4"
+                                ></i>
+
+                                <span class="hidden sm:inline">
+                                    Fit Width
                                 </span>
-
-                            </span>
-
+                            </button>
                         </div>
 
-                    </div>
-
-
-                    {{-- ZOOM --}}
-                    <div class="flex items-center gap-2">
-
-                        <button
-                            type="button"
-                            id="zoom-out"
-                            class="w-9 h-9 rounded-lg
-                                   bg-slate-800 hover:bg-slate-700
-                                   border border-slate-700
-                                   flex items-center justify-center
-                                   transition"
-                            title="Perkecil"
-                        >
-                            <i
-                                data-lucide="zoom-out"
-                                class="w-4 h-4"
-                            ></i>
-                        </button>
-
-
-                        <div
-                            id="zoom-level"
-                            class="min-w-[65px] text-center
-                                   px-3 py-2 rounded-lg
-                                   bg-slate-800
-                                   border border-slate-700
-                                   text-xs text-slate-300"
-                        >
-                            100%
-                        </div>
-
-
-                        <button
-                            type="button"
-                            id="zoom-in"
-                            class="w-9 h-9 rounded-lg
-                                   bg-slate-800 hover:bg-slate-700
-                                   border border-slate-700
-                                   flex items-center justify-center
-                                   transition"
-                            title="Perbesar"
-                        >
-                            <i
-                                data-lucide="zoom-in"
-                                class="w-4 h-4"
-                            ></i>
-                        </button>
-
-
-                        <button
-                            type="button"
-                            id="fit-width"
-                            class="flex items-center gap-2
-                                   px-3 py-2 rounded-lg
-                                   bg-slate-800 hover:bg-slate-700
-                                   border border-slate-700
-                                   text-xs text-slate-300
-                                   transition"
-                            title="Sesuaikan dengan lebar"
-                        >
-
-                            <i
-                                data-lucide="maximize-2"
-                                class="w-4 h-4"
-                            ></i>
-
-                            <span class="hidden sm:inline">
-                                Fit Width
-                            </span>
-
-                        </button>
-
-                    </div>
-
-
-                    {{-- SECURITY INFO --}}
-                    <div class="flex items-center gap-2">
-
-                        <div
-                            class="hidden sm:flex items-center gap-2
-                                   px-3 py-2 rounded-lg
-                                   bg-emerald-500/10
-                                   border border-emerald-500/20
-                                   text-emerald-400 text-xs"
-                        >
-
+                        <span class="hidden lg:inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs">
                             <i
                                 data-lucide="shield-check"
                                 class="w-4 h-4"
                             ></i>
 
                             Protected Reader
-
-                        </div>
-
+                        </span>
                     </div>
-
                 </div>
-
-            </div>
-
-
-            {{-- =================================================
-                 LOADING
-            ================================================== --}}
-            <div
-                id="pdf-loading"
-                class="absolute inset-0 z-[90]
-                       flex items-center justify-center
-                       bg-slate-950/90
-                       backdrop-blur-sm"
-            >
-
-                <div class="flex flex-col items-center gap-4">
-
-                    <div
-                        class="w-10 h-10 rounded-full
-                               border-4 border-slate-700
-                               border-t-white
-                               animate-spin"
-                    ></div>
-
-                    <div class="text-sm text-slate-400">
-                        Memuat dokumen...
-                    </div>
-
-                </div>
-
-            </div>
-
-
-            {{-- =================================================
-                 PDF PAGES
-            ================================================== --}}
-            <div
-                id="pdf-pages"
-                class="flex flex-col items-center gap-6
-                       w-full
-                       py-6 px-2 sm:px-4"
-            >
-            </div>
-
-
-            {{-- =================================================
-                 EMPTY / ERROR
-            ================================================== --}}
-            <div
-                id="pdf-placeholder"
-                class="hidden min-h-[50vh]
-                       flex-col items-center justify-center
-                       text-center px-6"
-            >
 
                 <div
-                    class="w-14 h-14 rounded-2xl
-                           bg-red-500/10
-                           border border-red-500/20
-                           flex items-center justify-center
-                           mb-4"
+                    id="pdf-loading"
+                    role="status"
+                    class="absolute inset-0 z-10 flex items-center justify-center bg-slate-950/90"
                 >
+                    <div class="flex flex-col items-center gap-4">
+                        <div class="w-10 h-10 rounded-full border-4 border-slate-700 border-t-white animate-spin"></div>
 
-                    <i
-                        data-lucide="file-warning"
-                        class="w-7 h-7 text-red-400"
-                    ></i>
-
+                        <p class="text-sm text-slate-400">
+                            Memuat dokumen…
+                        </p>
+                    </div>
                 </div>
 
+                <div
+                    id="pdf-pages"
+                    class="flex flex-col items-center gap-6 w-full py-6 px-2 sm:px-4"
+                ></div>
 
-                <h3 class="text-lg font-semibold text-white mb-2">
-                    Dokumen tidak dapat dimuat
-                </h3>
-
-
-                <p
-                    id="pdf-error-message"
-                    class="text-sm text-slate-400 max-w-md"
+                <div
+                    id="pdf-placeholder"
+                    role="alert"
+                    class="hidden min-h-[50vh] flex-col items-center justify-center text-center px-6"
                 >
-                    Terjadi kesalahan saat memuat dokumen PDF.
-                </p>
+                    <i
+                        data-lucide="file-warning"
+                        class="w-10 h-10 text-red-400 mb-4"
+                    ></i>
 
+                    <h2 class="text-lg font-semibold text-white mb-2">
+                        Dokumen tidak dapat dimuat
+                    </h2>
+
+                    <p
+                        id="pdf-error-message"
+                        class="text-sm text-slate-400 max-w-md"
+                    >
+                        Terjadi kesalahan saat memuat dokumen PDF.
+                    </p>
+                </div>
             </div>
-
         </div>
-
-    </main>
-
-</div>
-
-{{-- MODAL REQUEST DOWNLOAD --}}
-<div id="requestDownloadModal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm hidden">
-    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl space-y-4 text-white">
-        <div class="flex items-center justify-between">
-            <h3 class="text-base font-bold text-white">Permohonan Izin Download Dokumen</h3>
-            <button type="button" onclick="closeRequestDownloadModal()" class="text-slate-400 hover:text-white">
-                <i data-lucide="x" class="w-5 h-5"></i>
-            </button>
-        </div>
-        <form action="{{ route('student.requests.store') }}" method="POST" class="space-y-4">
-            @csrf
-            <input type="hidden" name="request_type" value="download">
-            <input type="hidden" name="document_id" value="{{ $document->id }}">
-            <div>
-                <label class="block text-xs font-semibold text-slate-400 mb-1">Dokumen Target</label>
-                <input type="text" value="{{ $document->title }}" readonly class="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-slate-300 font-medium">
-            </div>
-            <div>
-                <label class="block text-xs font-semibold text-slate-400 mb-1">Alasan Permohonan Unduh</label>
-                <textarea name="reason" rows="3" required placeholder="Tuliskan alasan mengapa Anda perlu mengunduh dokumen ini..." class="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white focus:outline-none focus:border-blue-500"></textarea>
-            </div>
-            <div class="flex justify-end gap-2 pt-2">
-                <button type="button" onclick="closeRequestDownloadModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold transition">Batal</button>
-                <button type="submit" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold transition">Kirim Request Download</button>
-            </div>
-        </form>
     </div>
-</div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
 
-<script>
-function openRequestDownloadModal() {
-    document.getElementById('requestDownloadModal').classList.remove('hidden');
-}
-function closeRequestDownloadModal() {
-    document.getElementById('requestDownloadModal').classList.add('hidden');
-}
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const pdfUrl = @json($pdfUrl);
+            const likeUrl = @json($likeUrl);
+            const bookmarkUrl = @json($bookmarkUrl);
+            const csrfToken = @json(csrf_token());
+            const canInteract = @json($canInteract);
+            const expiresAt = @json($expiresAtIso);
 
-document.addEventListener('DOMContentLoaded', function () {
-    pdfjsLib.GlobalWorkerOptions.workerSrc =
-        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+            const reader = document.getElementById('case-reader');
+            const container = document.getElementById('pdf-container');
+            const pages = document.getElementById('pdf-pages');
+            const loading = document.getElementById('pdf-loading');
+            const placeholder = document.getElementById('pdf-placeholder');
+            const errorMessage = document.getElementById('pdf-error-message');
+            const currentPageLabel = document.getElementById('current-page');
+            const totalPagesLabel = document.getElementById('total-pages');
+            const zoomLabel = document.getElementById('zoom-level');
+            const zoomIn = document.getElementById('zoom-in');
+            const zoomOut = document.getElementById('zoom-out');
+            const fitWidth = document.getElementById('fit-width');
+            const likeButton = document.getElementById('like-btn');
+            const bookmarkButton = document.getElementById('bookmark-btn');
+            const actionMessage = document.getElementById('reader-action-message');
 
-    const pdfUrl = @json($pdfUrl);
-    const userName = @json($userName);
-    const userEmail = @json($userEmail);
-    const isAdmin = @json($isAdmin);
-    const expiresAt = @json($expiresAt);
+            let pdfDocument = null;
+            let loadingTask = null;
+            let userScale = 1;
+            let baseScale = 1;
+            let currentPage = 1;
+            let rendering = false;
+            let resizeTimer = null;
+            let scrollFrame = null;
+            let countdownInterval = null;
+            let accessExpired = false;
 
-    const pdfContainer = document.getElementById('pdf-container');
-    const pdfPages = document.getElementById('pdf-pages');
-    const pdfLoading = document.getElementById('pdf-loading');
-    const pdfPlaceholder = document.getElementById('pdf-placeholder');
-    const pdfErrorMessage = document.getElementById('pdf-error-message');
-    const currentPageElement = document.getElementById('current-page');
-    const totalPagesElement = document.getElementById('total-pages');
-    const zoomLevelElement = document.getElementById('zoom-level');
-    const zoomInButton = document.getElementById('zoom-in');
-    const zoomOutButton = document.getElementById('zoom-out');
-    const fitWidthButton = document.getElementById('fit-width');
+            const zoomButtons = [
+                zoomIn,
+                zoomOut,
+                fitWidth,
+            ];
 
-    let pdfDoc = null;
-    let userScale = 1;
-    let baseScale = 1;
-    let rendering = false;
-    let renderAgain = false;
-    let currentPage = 1;
-    let resizeTimer = null;
+            function updateControls() {
+                const disabled = !pdfDocument
+                    || rendering
+                    || accessExpired;
 
-    const watermarkColor = 'rgba(100, 116, 139, 0.20)';
-    const watermarkText = "Psikologi Universitas Ciputra Surabaya";
+                zoomButtons.forEach(function (button) {
+                    button.disabled = disabled;
+                });
 
-    if (typeof lucide !== 'undefined') {
-        lucide.createIcons();
-    }
-
-    loadPdf();
-
-    async function loadPdf() {
-        try {
-            pdfLoading.classList.remove('hidden');
-            pdfPlaceholder.classList.add('hidden');
-
-            pdfDoc = await pdfjsLib.getDocument({
-                url: pdfUrl,
-                disableAutoFetch: false,
-                disableStream: false
-            }).promise;
-
-            totalPagesElement.textContent = pdfDoc.numPages;
-
-            await calculateBaseScale();
-            await renderAllPages(1);
-
-            pdfLoading.classList.add('hidden');
-        } catch (error) {
-            console.error('PDF loading error:', error);
-            pdfLoading.classList.add('hidden');
-            pdfPlaceholder.classList.remove('hidden');
-            pdfPlaceholder.classList.add('flex');
-            pdfErrorMessage.textContent =
-                'PDF tidak dapat dibuka. Pastikan file tersedia dan akses Anda masih valid.';
-        }
-    }
-
-    async function calculateBaseScale() {
-        if (!pdfDoc) return;
-
-        const firstPage = await pdfDoc.getPage(1);
-        const viewport = firstPage.getViewport({ scale: 1 });
-        const containerWidth = pdfContainer.clientWidth;
-        const horizontalPadding = window.innerWidth < 640 ? 20 : 50;
-        const availableWidth = Math.max(300, containerWidth - horizontalPadding);
-
-        baseScale = availableWidth / viewport.width;
-
-        if (baseScale < 0.5) {
-            baseScale = 0.5;
-        }
-    }
-
-    async function renderAllPages(pageToRestore = currentPage) {
-        if (!pdfDoc) return;
-
-        if (rendering) {
-            renderAgain = true;
-            return;
-        }
-
-        rendering = true;
-
-        try {
-            pdfPages.innerHTML = '';
-
-            for (let pageNumber = 1; pageNumber <= pdfDoc.numPages; pageNumber++) {
-                await renderPage(pageNumber);
+                zoomLabel.textContent =
+                    Math.round(userScale * 100) + '%';
             }
 
-            requestAnimationFrame(function () {
-                scrollToPage(pageToRestore);
-            });
+            function showError(message) {
+                loading.classList.add('hidden');
+                pages.replaceChildren();
 
-        } catch (error) {
-            console.error('Render error:', error);
-        } finally {
-            rendering = false;
+                placeholder.classList.remove('hidden');
+                placeholder.classList.add('flex');
 
-            if (renderAgain) {
-                renderAgain = false;
-                const page = currentPage;
-                renderAllPages(page);
+                errorMessage.textContent = message;
             }
-        }
-    }
 
-    async function renderPage(pageNumber) {
-        const page = await pdfDoc.getPage(pageNumber);
-        const displayScale = baseScale * userScale;
-        const viewport = page.getViewport({ scale: displayScale });
-        const outputScale = Math.min(window.devicePixelRatio || 1, 2);
-
-        const canvas = document.createElement('canvas');
-        const context = canvas.getContext('2d', { alpha: false });
-
-        canvas.width = Math.floor(viewport.width * outputScale);
-        canvas.height = Math.floor(viewport.height * outputScale);
-        canvas.style.width = Math.floor(viewport.width) + 'px';
-        canvas.style.height = Math.floor(viewport.height) + 'px';
-        canvas.className = 'pdf-page';
-
-        const wrapper = document.createElement('div');
-        wrapper.className = 'pdf-page-wrapper';
-        wrapper.dataset.pageNumber = pageNumber;
-        wrapper.style.width = '100%';
-        wrapper.style.display = 'flex';
-        wrapper.style.justifyContent = 'center';
-        wrapper.style.position = 'relative';
-        wrapper.style.userSelect = 'none';
-
-        canvas.style.userSelect = 'none';
-
-        wrapper.appendChild(canvas);
-        pdfPages.appendChild(wrapper);
-
-        const renderContext = {
-            canvasContext: context,
-            viewport: viewport,
-            transform: outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : null,
-            intent: 'display'
-        };
-
-        await page.render(renderContext).promise;
-
-        drawWatermark(context, canvas.width, canvas.height, outputScale);
-    }
-
-    function drawWatermark(ctx, canvasWidth, canvasHeight, outputScale) {
-        ctx.save();
-        ctx.globalAlpha = 1;
-        ctx.fillStyle = watermarkColor;
-        ctx.strokeStyle = 'rgba(100, 116, 139, 0.10)';
-
-        const fontSize = Math.max(18, Math.min(28, canvasWidth / 35));
-        ctx.font = `600 ${fontSize}px Arial, sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-
-        ctx.translate(canvasWidth / 2, canvasHeight / 2);
-        ctx.rotate(-25 * Math.PI / 180);
-
-        const horizontalGap = Math.max(250, canvasWidth / 3);
-        const verticalGap = Math.max(130, canvasHeight / 7);
-
-        const startX = -canvasWidth * 1.2;
-        const endX = canvasWidth * 1.2;
-        const startY = -canvasHeight * 1.2;
-        const endY = canvasHeight * 1.2;
-
-        for (let y = startY; y <= endY; y += verticalGap) {
-            for (let x = startX; x <= endX; x += horizontalGap) {
-                ctx.fillText(watermarkText, x, y);
-            }
-        }
-
-        ctx.globalAlpha = 0.10;
-        ctx.font = `700 ${fontSize * 1.35}px Arial, sans-serif`;
-        ctx.fillText(watermarkText, 0, 0);
-
-        ctx.restore();
-    }
-
-    function updateZoomUI() {
-        const percentage = Math.round(userScale * 100);
-        zoomLevelElement.textContent = percentage + '%';
-    }
-
-    zoomInButton.addEventListener('click', async function () {
-        if (rendering) return;
-        const pageBeforeZoom = getCurrentPage();
-        userScale = Math.min(userScale + 0.15, 2.5);
-        updateZoomUI();
-        pdfLoading.classList.remove('hidden');
-        await renderAllPages(pageBeforeZoom);
-        pdfLoading.classList.add('hidden');
-    });
-
-    zoomOutButton.addEventListener('click', async function () {
-        if (rendering) return;
-        const pageBeforeZoom = getCurrentPage();
-        userScale = Math.max(userScale - 0.15, 0.5);
-        updateZoomUI();
-        pdfLoading.classList.remove('hidden');
-        await renderAllPages(pageBeforeZoom);
-        pdfLoading.classList.add('hidden');
-    });
-
-    fitWidthButton.addEventListener('click', async function () {
-        if (rendering) return;
-        const pageBeforeZoom = getCurrentPage();
-        userScale = 1;
-        updateZoomUI();
-        await calculateBaseScale();
-        pdfLoading.classList.remove('hidden');
-        await renderAllPages(pageBeforeZoom);
-        pdfLoading.classList.add('hidden');
-    });
-
-    function getCurrentPage() {
-        const wrappers = document.querySelectorAll('.pdf-page-wrapper');
-        if (!wrappers.length) return currentPage;
-
-        const toolbar = document.getElementById('pdf-toolbar');
-        const toolbarHeight = toolbar ? toolbar.offsetHeight : 0;
-        const targetY = pdfContainer.getBoundingClientRect().top + toolbarHeight + 30;
-
-        let closestPage = 1;
-        let closestDistance = Infinity;
-
-        wrappers.forEach(function (wrapper) {
-            const rect = wrapper.getBoundingClientRect();
-            const distance = Math.abs(rect.top - targetY);
-
-            if (distance < closestDistance) {
-                closestDistance = distance;
-                closestPage = parseInt(wrapper.dataset.pageNumber, 10);
-            }
-        });
-
-        currentPage = closestPage;
-        currentPageElement.textContent = currentPage;
-        return currentPage;
-    }
-
-    function scrollToPage(pageNumber) {
-        const wrapper = document.querySelector(`.pdf-page-wrapper[data-page-number="${pageNumber}"]`);
-        if (!wrapper) return;
-
-        const toolbar = document.getElementById('pdf-toolbar');
-        const toolbarHeight = toolbar ? toolbar.offsetHeight : 0;
-        const containerRect = pdfContainer.getBoundingClientRect();
-        const wrapperRect = wrapper.getBoundingClientRect();
-
-        const offset = wrapperRect.top - containerRect.top + pdfContainer.scrollTop - toolbarHeight - 15;
-
-        pdfContainer.scrollTo({
-            top: Math.max(0, offset),
-            behavior: 'instant'
-        });
-
-        currentPage = pageNumber;
-        currentPageElement.textContent = pageNumber;
-    }
-
-    let scrollTimeout = null;
-
-    pdfContainer.addEventListener('scroll', function () {
-        if (scrollTimeout) {
-            cancelAnimationFrame(scrollTimeout);
-        }
-        scrollTimeout = requestAnimationFrame(function () {
-            getCurrentPage();
-        });
-    }, { passive: true });
-
-    window.addEventListener('resize', function () {
-        clearTimeout(resizeTimer);
-        resizeTimer = setTimeout(async function () {
-            if (!pdfDoc || rendering) return;
-            const pageBeforeResize = getCurrentPage();
-            await calculateBaseScale();
-            await renderAllPages(pageBeforeResize);
-        }, 250);
-    });
-
-    /*
-    |--------------------------------------------------------------------------
-    | LIKE & BOOKMARK
-    |--------------------------------------------------------------------------
-    */
-    const likeButton = document.getElementById('like-btn');
-    likeButton.addEventListener('click', async function () {
-        try {
-            likeButton.disabled = true;
-            const response = await fetch(`/document/{{ $document->id }}/like`, {
-                method: 'POST',
-                headers: {
-                    'X-CSRF-TOKEN': '{{ csrf_token() }}',
-                    'Accept': 'application/json',
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({})
-            });
-
-            if (!response.ok) throw new Error('Like failed');
-
-            const data = await response.json();
-            const liked = Boolean(data.is_liked);
-
-            likeButton.dataset.liked = liked ? '1' : '0';
-            const icon = document.getElementById('like-icon');
-            const text = document.getElementById('like-text');
-
-            if (liked) {
-                icon.classList.add('fill-current', 'text-red-400');
-                text.textContent = 'Disukai';
-            } else {
-                icon.classList.remove('fill-current', 'text-red-400');
-                text.textContent = 'Suka';
-            }
-        } catch (error) {
-            console.error('Like error:', error);
-        } finally {
-            likeButton.disabled = false;
-        }
-    });
-
-    const bookmarkButton = document.getElementById('bookmark-btn');
-    bookmarkButton.addEventListener('click', async function () {
-        try {
-            bookmarkButton.disabled = true;
-            const response = await fetch(`/document/{{ $document->id }}/bookmark`, {
-                method: 'POST',
-                headers: {
-                    'X-CSRF-TOKEN': '{{ csrf_token() }}',
-                    'Accept': 'application/json',
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({})
-            });
-
-            if (!response.ok) throw new Error('Bookmark failed');
-
-            const data = await response.json();
-            const bookmarked = Boolean(data.is_bookmarked);
-
-            bookmarkButton.dataset.bookmarked = bookmarked ? '1' : '0';
-            const icon = document.getElementById('bookmark-icon');
-            const text = document.getElementById('bookmark-text');
-
-            if (bookmarked) {
-                icon.classList.add('fill-current', 'text-blue-400');
-                text.textContent = 'Tersimpan';
-            } else {
-                icon.classList.remove('fill-current', 'text-blue-400');
-                text.textContent = 'Simpan';
-            }
-        } catch (error) {
-            console.error('Bookmark error:', error);
-        } finally {
-            bookmarkButton.disabled = false;
-        }
-    });
-
-    /*
-    |--------------------------------------------------------------------------
-    | ACCESS COUNTDOWN LOGIC
-    |--------------------------------------------------------------------------
-    */
-    @if(!$isAdmin &&$expiresAt)
-        const countdownElement = document.getElementById('countdown-text');
-        const accessBadge = document.getElementById('access-badge');
-        const expiresTimestamp = new Date(@json(\Carbon\Carbon::parse($expiresAt)->toIso8601String())).getTime();
-
-        function updateCountdown() {
-            const now = Date.now();
-            const difference = expiresTimestamp - now;
-
-            if (difference <= 0) {
-                if (countdownElement) {
-                    countdownElement.textContent = 'Akses berakhir';
-                }
-                if (accessBadge) {
-                    accessBadge.classList.remove('text-amber-400', 'bg-amber-500/10', 'border-amber-500/20');
-                    accessBadge.classList.add('text-red-400', 'bg-red-500/10', 'border-red-500/20');
+            function expireAccess() {
+                if (accessExpired) {
+                    return;
                 }
 
-                setTimeout(function () {
-                    window.location.reload();
-                }, 1500);
-                return;
+                accessExpired = true;
+
+                clearInterval(countdownInterval);
+                clearTimeout(resizeTimer);
+
+                likeButton.disabled = true;
+                bookmarkButton.disabled = true;
+
+                updateControls();
+
+                const countdown = document.getElementById(
+                    'countdown-text'
+                );
+
+                if (countdown) {
+                    countdown.textContent = 'Akses berakhir';
+                }
+
+                showError(
+                    'Masa akses baca telah berakhir. '
+                    + 'Silakan ajukan akses kembali.'
+                );
+
+                if (pdfDocument) {
+                    Promise.resolve(
+                        pdfDocument.destroy()
+                    ).catch(function () {});
+                } else if (loadingTask) {
+                    Promise.resolve(
+                        loadingTask.destroy()
+                    ).catch(function () {});
+                }
             }
 
-            const totalSeconds = Math.floor(difference / 1000);
-            const days = Math.floor(totalSeconds / 86400);
-            const hours = Math.floor((totalSeconds % 86400) / 3600);
-            const minutes = Math.floor((totalSeconds % 3600) / 60);
-            const seconds = totalSeconds % 60;
+            function updateCountdown() {
+                if (!expiresAt) {
+                    return;
+                }
 
-            let result = '';
-            if (days > 0) result += days + 'h ';
-            result += String(hours).padStart(2, '0') + ':' +
-                      String(minutes).padStart(2, '0') + ':' +
-                      String(seconds).padStart(2, '0');
+                const remaining =
+                    new Date(expiresAt).getTime() - Date.now();
 
-            if (countdownElement) {
-                countdownElement.textContent = 'Akses ' + result;
+                if (remaining <= 0) {
+                    expireAccess();
+                    return;
+                }
+
+                const totalSeconds = Math.floor(remaining / 1000);
+                const days = Math.floor(totalSeconds / 86400);
+                const hours = Math.floor(
+                    (totalSeconds % 86400) / 3600
+                );
+                const minutes = Math.floor(
+                    (totalSeconds % 3600) / 60
+                );
+                const seconds = totalSeconds % 60;
+
+                const time = [
+                    hours,
+                    minutes,
+                    seconds,
+                ].map(function (value) {
+                    return String(value).padStart(2, '0');
+                }).join(':');
+
+                const countdown = document.getElementById(
+                    'countdown-text'
+                );
+
+                if (countdown) {
+                    countdown.textContent =
+                        'Akses '
+                        + (days > 0 ? days + ' hari ' : '')
+                        + time;
+                }
             }
-        }
 
-        updateCountdown();
-        setInterval(updateCountdown, 1000);
-    @endif
+            async function calculateBaseScale() {
+                if (!pdfDocument || accessExpired) {
+                    return;
+                }
 
-    /*
-    |--------------------------------------------------------------------------
-    | SECURITY
-    |--------------------------------------------------------------------------
-    */
-    document.addEventListener('contextmenu', function (e) { e.preventDefault(); }, true);
+                const firstPage = await pdfDocument.getPage(1);
 
-    document.addEventListener('selectstart', function (e) {
-        const target = e.target;
-        if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return;
-        e.preventDefault();
-    }, true);
+                const viewport = firstPage.getViewport({
+                    scale: 1,
+                });
 
-    document.addEventListener('dragstart', function (e) { e.preventDefault(); }, true);
-    document.addEventListener('copy', function (e) { e.preventDefault(); }, true);
-    document.addEventListener('cut', function (e) { e.preventDefault(); }, true);
+                const padding = window.innerWidth < 640
+                    ? 24
+                    : 48;
 
-    document.addEventListener('keydown', function (e) {
-        const key = e.key.toLowerCase();
-        const modifier = e.ctrlKey || e.metaKey;
+                const availableWidth = Math.max(
+                    120,
+                    container.clientWidth - padding
+                );
 
-        if (modifier && (key === 'c' || key === 's' || key === 'p' || key === 'u')) {
-            e.preventDefault();
-            return;
-        }
+                baseScale = availableWidth / viewport.width;
+            }
 
-        if (modifier && e.shiftKey && key === 'i') {
-            e.preventDefault();
-            return;
-        }
+            function drawWatermark(context, width, height) {
+                const text =
+                    'Psikologi Universitas Ciputra Surabaya';
 
-        if (e.key === 'F12') {
-            e.preventDefault();
-            return;
-        }
-    }, true);
+                const fontSize = Math.max(
+                    18,
+                    Math.min(28, width / 35)
+                );
 
-    pdfContainer.addEventListener('dblclick', function (e) { e.preventDefault(); });
+                context.save();
 
-    window.addEventListener('beforeprint', function () {
-        document.body.dataset.printBlocked = 'true';
-    });
+                context.fillStyle =
+                    'rgba(100, 116, 139, 0.20)';
 
-    updateZoomUI();
-});
-</script>
+                context.font =
+                    `600 ${fontSize}px Arial, sans-serif`;
+
+                context.textAlign = 'center';
+                context.textBaseline = 'middle';
+
+                context.translate(
+                    width / 2,
+                    height / 2
+                );
+
+                context.rotate(
+                    -25 * Math.PI / 180
+                );
+
+                const horizontalGap = Math.max(
+                    250,
+                    width / 3
+                );
+
+                const verticalGap = Math.max(
+                    130,
+                    height / 7
+                );
+
+                for (
+                    let y = -height * 1.2;
+                    y <= height * 1.2;
+                    y += verticalGap
+                ) {
+                    for (
+                        let x = -width * 1.2;
+                        x <= width * 1.2;
+                        x += horizontalGap
+                    ) {
+                        context.fillText(text, x, y);
+                    }
+                }
+
+                context.globalAlpha = 0.10;
+
+                context.font =
+                    `700 ${fontSize * 1.35}px Arial, sans-serif`;
+
+                context.fillText(text, 0, 0);
+
+                context.restore();
+            }
+
+            async function renderPage(pageNumber) {
+                if (accessExpired) {
+                    return;
+                }
+
+                const page = await pdfDocument.getPage(
+                    pageNumber
+                );
+
+                if (accessExpired) {
+                    return;
+                }
+
+                const viewport = page.getViewport({
+                    scale: baseScale * userScale,
+                });
+
+                const outputScale = Math.min(
+                    window.devicePixelRatio || 1,
+                    2
+                );
+
+                const canvas = document.createElement('canvas');
+
+                const context = canvas.getContext('2d', {
+                    alpha: false,
+                });
+
+                if (!context) {
+                    throw new Error(
+                        'Canvas tidak tersedia.'
+                    );
+                }
+
+                canvas.width = Math.floor(
+                    viewport.width * outputScale
+                );
+
+                canvas.height = Math.floor(
+                    viewport.height * outputScale
+                );
+
+                canvas.style.width =
+                    Math.floor(viewport.width) + 'px';
+
+                canvas.style.height =
+                    Math.floor(viewport.height) + 'px';
+
+                canvas.className = 'pdf-page';
+
+                const wrapper = document.createElement('div');
+
+                wrapper.className = 'pdf-page-wrapper';
+                wrapper.dataset.pageNumber = pageNumber;
+
+                wrapper.appendChild(canvas);
+                pages.appendChild(wrapper);
+
+                await page.render({
+                    canvasContext: context,
+                    viewport: viewport,
+
+                    transform: outputScale !== 1
+                        ? [
+                            outputScale,
+                            0,
+                            0,
+                            outputScale,
+                            0,
+                            0,
+                        ]
+                        : null,
+
+                    intent: 'display',
+                }).promise;
+
+                if (!accessExpired) {
+                    drawWatermark(
+                        context,
+                        canvas.width,
+                        canvas.height
+                    );
+                }
+            }
+
+            function getCurrentPage() {
+                const wrappers = pages.querySelectorAll(
+                    '.pdf-page-wrapper'
+                );
+
+                if (!wrappers.length) {
+                    return currentPage;
+                }
+
+                const toolbar = document.getElementById(
+                    'pdf-toolbar'
+                );
+
+                const targetY =
+                    container.getBoundingClientRect().top
+                    + toolbar.offsetHeight
+                    + 30;
+
+                let closestPage = 1;
+                let closestDistance = Infinity;
+
+                wrappers.forEach(function (wrapper) {
+                    const distance = Math.abs(
+                        wrapper.getBoundingClientRect().top
+                        - targetY
+                    );
+
+                    if (distance < closestDistance) {
+                        closestDistance = distance;
+
+                        closestPage = Number(
+                            wrapper.dataset.pageNumber
+                        );
+                    }
+                });
+
+                currentPage = closestPage;
+                currentPageLabel.textContent = currentPage;
+
+                return currentPage;
+            }
+
+            function scrollToPage(pageNumber) {
+                const wrapper = pages.querySelector(
+                    `.pdf-page-wrapper[data-page-number="${pageNumber}"]`
+                );
+
+                if (!wrapper) {
+                    return;
+                }
+
+                const toolbar = document.getElementById(
+                    'pdf-toolbar'
+                );
+
+                const offset =
+                    wrapper.getBoundingClientRect().top
+                    - container.getBoundingClientRect().top
+                    + container.scrollTop
+                    - toolbar.offsetHeight
+                    - 15;
+
+                container.scrollTo({
+                    top: Math.max(0, offset),
+                    behavior: 'auto',
+                });
+
+                currentPage = pageNumber;
+                currentPageLabel.textContent = pageNumber;
+            }
+
+            async function renderAllPages(pageToRestore = 1) {
+                if (
+                    !pdfDocument
+                    || rendering
+                    || accessExpired
+                ) {
+                    return;
+                }
+
+                rendering = true;
+
+                updateControls();
+
+                loading.classList.remove('hidden');
+
+                try {
+                    pages.replaceChildren();
+
+                    placeholder.classList.add('hidden');
+                    placeholder.classList.remove('flex');
+
+                    for (
+                        let pageNumber = 1;
+                        pageNumber <= pdfDocument.numPages;
+                        pageNumber++
+                    ) {
+                        if (accessExpired) {
+                            break;
+                        }
+
+                        await renderPage(pageNumber);
+                    }
+
+                    if (!accessExpired) {
+                        scrollToPage(pageToRestore);
+                    }
+                } catch (error) {
+                    if (!accessExpired) {
+                        showError(
+                            'Halaman PDF gagal ditampilkan. '
+                            + 'Muat ulang halaman untuk mencoba lagi.'
+                        );
+                    }
+                } finally {
+                    rendering = false;
+
+                    loading.classList.add('hidden');
+
+                    updateControls();
+                }
+            }
+
+            async function loadPdf() {
+                if (accessExpired) {
+                    return;
+                }
+
+                if (!window.pdfjsLib) {
+                    showError(
+                        'Komponen PDF gagal dimuat. '
+                        + 'Periksa koneksi internet lalu muat ulang halaman.'
+                    );
+
+                    return;
+                }
+
+                pdfjsLib.GlobalWorkerOptions.workerSrc =
+                    'https://cdnjs.cloudflare.com/ajax/libs/'
+                    + 'pdf.js/2.16.105/pdf.worker.min.js';
+
+                try {
+                    loadingTask = pdfjsLib.getDocument({
+                        url: pdfUrl,
+                        disableAutoFetch: false,
+                        disableStream: false,
+                        isEvalSupported: false,
+                    });
+
+                    pdfDocument = await loadingTask.promise;
+
+                    if (accessExpired) {
+                        await pdfDocument.destroy();
+                        return;
+                    }
+
+                    totalPagesLabel.textContent =
+                        pdfDocument.numPages;
+
+                    await calculateBaseScale();
+                    await renderAllPages(1);
+                } catch (error) {
+                    if (!accessExpired) {
+                        showError(
+                            'PDF tidak dapat dibuka. '
+                            + 'Pastikan file tersedia dan '
+                            + 'akses Anda masih valid.'
+                        );
+                    }
+                }
+            }
+
+            async function changeZoom(nextScale, fit = false) {
+                if (
+                    !pdfDocument
+                    || rendering
+                    || accessExpired
+                ) {
+                    return;
+                }
+
+                const pageBeforeZoom = getCurrentPage();
+
+                userScale = nextScale;
+
+                if (fit) {
+                    await calculateBaseScale();
+                }
+
+                await renderAllPages(pageBeforeZoom);
+            }
+
+            zoomIn.addEventListener('click', function () {
+                changeZoom(
+                    Math.min(userScale + 0.15, 2.5)
+                );
+            });
+
+            zoomOut.addEventListener('click', function () {
+                changeZoom(
+                    Math.max(userScale - 0.15, 0.5)
+                );
+            });
+
+            fitWidth.addEventListener('click', function () {
+                changeZoom(1, true);
+            });
+
+            container.addEventListener(
+                'scroll',
+                function () {
+                    if (scrollFrame) {
+                        cancelAnimationFrame(scrollFrame);
+                    }
+
+                    scrollFrame = requestAnimationFrame(
+                        getCurrentPage
+                    );
+                },
+                {
+                    passive: true,
+                }
+            );
+
+            window.addEventListener('resize', function () {
+                clearTimeout(resizeTimer);
+
+                resizeTimer = setTimeout(async function () {
+                    if (
+                        !pdfDocument
+                        || rendering
+                        || accessExpired
+                    ) {
+                        return;
+                    }
+
+                    const pageBeforeResize = getCurrentPage();
+
+                    await calculateBaseScale();
+                    await renderAllPages(pageBeforeResize);
+                }, 250);
+            });
+
+            async function toggleAction(button, url, type) {
+                if (
+                    !canInteract
+                    || button.disabled
+                    || accessExpired
+                ) {
+                    return;
+                }
+
+                button.disabled = true;
+                actionMessage.textContent = '';
+
+                try {
+                    const response = await fetch(url, {
+                        method: 'POST',
+
+                        headers: {
+                            'X-CSRF-TOKEN': csrfToken,
+                            'Accept': 'application/json',
+                            'Content-Type': 'application/json',
+                        },
+
+                        body: JSON.stringify({}),
+                    });
+
+                    const data = await response.json();
+
+                    if (!response.ok || !data.success) {
+                        throw new Error(
+                            data.message
+                            || 'Tindakan gagal diproses.'
+                        );
+                    }
+
+                    if (type === 'like') {
+                        const active = Boolean(
+                            data.is_liked
+                        );
+
+                        button.dataset.liked =
+                            active ? '1' : '0';
+
+                        const icon = document.getElementById(
+                            'like-icon'
+                        );
+
+                        icon.classList.toggle(
+                            'fill-current',
+                            active
+                        );
+
+                        icon.classList.toggle(
+                            'text-red-400',
+                            active
+                        );
+
+                        document.getElementById(
+                            'like-text'
+                        ).textContent = active
+                            ? 'Disukai'
+                            : 'Suka';
+                    } else {
+                        const active = Boolean(
+                            data.is_bookmarked
+                        );
+
+                        button.dataset.bookmarked =
+                            active ? '1' : '0';
+
+                        const icon = document.getElementById(
+                            'bookmark-icon'
+                        );
+
+                        icon.classList.toggle(
+                            'fill-current',
+                            active
+                        );
+
+                        icon.classList.toggle(
+                            'text-blue-400',
+                            active
+                        );
+
+                        document.getElementById(
+                            'bookmark-text'
+                        ).textContent = active
+                            ? 'Tersimpan'
+                            : 'Simpan';
+                    }
+                } catch (error) {
+                    actionMessage.textContent =
+                        error.message
+                        || 'Tindakan gagal. Silakan coba lagi.';
+                } finally {
+                    button.disabled =
+                        !canInteract || accessExpired;
+                }
+            }
+
+            likeButton.addEventListener('click', function () {
+                toggleAction(
+                    likeButton,
+                    likeUrl,
+                    'like'
+                );
+            });
+
+            bookmarkButton.addEventListener('click', function () {
+                toggleAction(
+                    bookmarkButton,
+                    bookmarkUrl,
+                    'bookmark'
+                );
+            });
+
+            reader.addEventListener(
+                'contextmenu',
+                function (event) {
+                    event.preventDefault();
+                }
+            );
+
+            reader.addEventListener(
+                'selectstart',
+                function (event) {
+                    event.preventDefault();
+                }
+            );
+
+            reader.addEventListener(
+                'dragstart',
+                function (event) {
+                    event.preventDefault();
+                }
+            );
+
+            ['copy', 'cut'].forEach(function (eventName) {
+                reader.addEventListener(
+                    eventName,
+                    function (event) {
+                        event.preventDefault();
+                    }
+                );
+            });
+
+            document.addEventListener(
+                'keydown',
+                function (event) {
+                    const key = event.key.toLowerCase();
+                    const modifier =
+                        event.ctrlKey || event.metaKey;
+
+                    if (
+                        modifier
+                        && ['c', 's', 'p', 'u'].includes(key)
+                    ) {
+                        event.preventDefault();
+                    }
+                }
+            );
+
+            updateControls();
+
+            if (expiresAt) {
+                updateCountdown();
+
+                if (!accessExpired) {
+                    countdownInterval = setInterval(
+                        updateCountdown,
+                        1000
+                    );
+                }
+            }
+
+            if (!accessExpired) {
+                loadPdf();
+            }
+
+            window.lucide?.createIcons();
+        });
+    </script>
 @endsection

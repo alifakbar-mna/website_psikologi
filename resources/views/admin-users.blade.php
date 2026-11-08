@@ -1,663 +1,719 @@
-```blade
-@extends('layouts.app', ['title' => 'Kelola Pengguna - Admin'])
+@extends('layouts.app', ['title' => 'Kelola Pengguna'])
 
 @section('content')
-<div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+    @php
+        $canManagePermissions = auth()
+            ->user()
+            ->permits('manage_permissions');
 
-    {{-- Header --}}
-    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        $availableRoles = collect(config('cms.roles'))
+            ->filter(function ($label, $role) use ($canManagePermissions) {
+                return $canManagePermissions
+                    || in_array(
+                        $role,
+                        ['mahasiswa', 'asdos'],
+                        true
+                    );
+            });
+
+        $activeTab = request('tab') === 'manage'
+            || request()->filled('search')
+            || old('_user_form') === 'edit'
+                ? 'manage'
+                : 'add';
+
+        $restoreAdd = old('_user_form') === 'add';
+
+        $failedUser = old('_user_form') === 'edit'
+            ? $users->getCollection()->firstWhere(
+                'id',
+                old('edit_user_id')
+            )
+            : null;
+
+        $reopenEdit = null;
+
+        if (
+            $failedUser
+            && (
+                $canManagePermissions
+                || in_array(
+                    $failedUser->role,
+                    ['mahasiswa', 'asdos'],
+                    true
+                )
+            )
+        ) {
+            $reopenEdit = [
+                'url' => route(
+                    'admin.users.update',
+                    $failedUser->id
+                ),
+                'id' => $failedUser->id,
+                'name' => old('name', $failedUser->name),
+                'email' => old('email', $failedUser->email),
+                'role' => old('role', $failedUser->role),
+                'angkatan' => old(
+                    'angkatan',
+                    $failedUser->angkatan
+                ),
+            ];
+        }
+    @endphp
+
+    <div class="max-w-6xl mx-auto space-y-6">
         <div>
             <h1 class="text-2xl font-bold text-slate-800 tracking-tight">
                 Kelola Pengguna Sistem
             </h1>
-            <p class="text-xs text-slate-500 mt-1">
-                Daftarkan email civitas akademika agar diizinkan masuk via Google Login.
+
+            <p class="text-xs text-slate-500 mt-2">
+                Daftarkan Email Google anggota dan kelola
+                informasi akun yang sudah terdaftar.
             </p>
         </div>
 
-        <button
-            type="button"
-            onclick="openAddUserModal()"
-            class="bg-sage-600 hover:bg-sage-700 text-white font-medium px-4 py-2.5 rounded-xl text-xs flex items-center gap-2 transition shadow-sm"
+        <nav
+            aria-label="Bagian pengelolaan pengguna"
+            class="flex gap-2 p-1.5 bg-white border border-slate-200 rounded-2xl shadow-sm"
         >
-            <i data-lucide="user-plus" class="w-4 h-4"></i>
-            <span>Tambah User Baru</span>
-        </button>
-    </div>
+            <a
+                href="{{ route('admin.users', ['tab' => 'add']) }}"
+                @if($activeTab === 'add')
+                    aria-current="page"
+                @endif
+                class="flex-1 flex items-center justify-center gap-2 px-3 py-3 rounded-xl text-xs font-bold transition {{ $activeTab === 'add' ? 'bg-sage-600 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50' }}"
+            >
+                <i
+                    data-lucide="user-plus"
+                    class="w-4 h-4"
+                ></i>
 
-    {{-- Success Message --}}
-    @if (session('success'))
-        <div class="bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs p-4 rounded-xl flex items-center gap-2">
-            <i data-lucide="check-circle" class="w-4 h-4 flex-shrink-0"></i>
-            <span>{{ session('success') }}</span>
-        </div>
-    @endif
+                Tambah Anggota
+            </a>
 
-    {{-- Error Message --}}
-    @if ($errors->any())
-        <div class="bg-rose-50 border border-rose-200 text-rose-700 text-xs p-4 rounded-xl">
-            <div class="flex items-start gap-2">
-                <i data-lucide="alert-circle" class="w-4 h-4 flex-shrink-0 mt-0.5"></i>
+            <a
+                href="{{ route('admin.users', ['tab' => 'manage']) }}"
+                @if($activeTab === 'manage')
+                    aria-current="page"
+                @endif
+                class="flex-1 flex items-center justify-center gap-2 px-3 py-3 rounded-xl text-xs font-bold transition {{ $activeTab === 'manage' ? 'bg-sage-600 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50' }}"
+            >
+                <i
+                    data-lucide="users"
+                    class="w-4 h-4"
+                ></i>
 
-                <div>
-                    <p class="font-bold mb-1">Terjadi kesalahan:</p>
+                Kelola Anggota
+            </a>
+        </nav>
 
-                    <ul class="list-disc list-inside space-y-0.5">
-                        @foreach ($errors->all() as $error)
-                            <li>{{ $error }}</li>
-                        @endforeach
-                    </ul>
-                </div>
-            </div>
-        </div>
-    @endif
+        @if($activeTab === 'add')
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
+                <section class="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
+                    <div class="p-5 border-b border-slate-100 flex items-center gap-3">
+                        <div class="p-2.5 rounded-xl bg-sage-50 text-sage-600">
+                            <i
+                                data-lucide="user-plus"
+                                class="w-5 h-5"
+                            ></i>
+                        </div>
 
-    {{-- Table Users --}}
-    <div class="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
+                        <div>
+                            <h2 class="font-bold text-sm text-slate-800">
+                                Tambah Manual
+                            </h2>
 
-        <div class="overflow-x-auto">
-            <table class="w-full text-left border-collapse">
+                            <p class="text-[11px] text-slate-400 mt-1">
+                                Daftarkan satu anggota baru.
+                            </p>
+                        </div>
+                    </div>
 
-                <thead>
-                    <tr class="bg-slate-50 text-[11px] font-bold text-slate-500 uppercase border-b border-slate-200/80">
-                        <th class="p-4">Nama Lengkap</th>
-                        <th class="p-4">Email Google</th>
-                        <th class="p-4">Role</th>
-                        <th class="p-4">Angkatan</th>
-                        <th class="p-4">Tanggal Terdaftar</th>
-                        <th class="p-4 text-center">Aksi</th>
-                    </tr>
-                </thead>
+                    <form
+                        method="POST"
+                        action="{{ route('admin.users.store') }}"
+                        class="p-5 space-y-4"
+                    >
+                        @csrf
 
-                <tbody class="divide-y divide-slate-100 text-xs text-slate-700">
+                        <input
+                            type="hidden"
+                            name="_user_form"
+                            value="add"
+                        >
 
-                    @forelse($users as $user)
+                        <label class="block text-xs font-semibold text-slate-700">
+                            Nama Lengkap
 
-                        <tr class="hover:bg-slate-50/50 transition">
-
-                            {{-- Nama --}}
-                            <td class="p-4 font-bold text-slate-800">
-                                {{ $user->name }}
-                            </td>
-
-                            {{-- Email --}}
-                            <td class="p-4 text-slate-600 font-mono text-[11px]">
-                                {{ $user->email }}
-                            </td>
-
-                            {{-- Role --}}
-                            <td class="p-4">
-                                <span
-                                    class="px-2.5 py-1 text-[10px] font-bold rounded-full uppercase
-                                    {{ $user->role === 'admin'
-                                        ? 'bg-purple-50 text-purple-700 border border-purple-200'
-                                        : '' }}
-
-                                    {{ $user->role === 'dosen'
-                                        ? 'bg-blue-50 text-blue-700 border border-blue-200'
-                                        : '' }}
-
-                                    {{ $user->role === 'mahasiswa'
-                                        ? 'bg-sage-50 text-sage-700 border border-sage-200'
-                                        : '' }}"
-                                >
-                                    {{ $user->role }}
-                                </span>
-                            </td>
-
-                            {{-- Angkatan --}}
-                            <td class="p-4 text-slate-500">
-                                {{ $user->angkatan ?: '-' }}
-                            </td>
-
-                            {{-- Created At --}}
-                            <td class="p-4 text-slate-400 text-[11px]">
-                                {{ $user->created_at->format('d M Y') }}
-                            </td>
-
-                            {{-- Aksi --}}
-                            <td class="p-4">
-
-                                <div class="flex items-center justify-center gap-1.5">
-
-                                    {{-- Edit --}}
-                                    <button
-                                        type="button"
-                                        onclick="openEditUserModal(
-                                            '{{ $user->id }}',
-                                            @js($user->name),
-                                            @js($user->email),
-                                            '{{ $user->role }}',
-                                            @js($user->angkatan)
-                                        )"
-                                        class="p-1.5 text-blue-500 hover:bg-blue-50 rounded-lg transition"
-                                        title="Edit User"
-                                    >
-                                        <i data-lucide="pencil" class="w-4 h-4"></i>
-                                    </button>
-
-                                    {{-- Delete --}}
-                                    <form
-                                        action="{{ route('admin.users.destroy', $user->id) }}"
-                                        method="POST"
-                                        onsubmit="return confirm('Yakin hapus user ini?')"
-                                    >
-                                        @csrf
-                                        @method('DELETE')
-
-                                        <button
-                                            type="submit"
-                                            class="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg transition"
-                                            title="Hapus User"
-                                        >
-                                            <i data-lucide="trash-2" class="w-4 h-4"></i>
-                                        </button>
-                                    </form>
-
-                                </div>
-
-                            </td>
-
-                        </tr>
-
-                    @empty
-
-                        <tr>
-                            <td
-                                colspan="6"
-                                class="p-8 text-center text-slate-400"
+                            <input
+                                name="name"
+                                value="{{ $restoreAdd ? old('name') : '' }}"
+                                maxlength="255"
+                                required
+                                class="mt-2 w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs focus:outline-none focus:border-sage-600"
                             >
-                                Belum ada pengguna terdaftar.
-                            </td>
-                        </tr>
+                        </label>
 
-                    @endforelse
+                        <label class="block text-xs font-semibold text-slate-700">
+                            Email Google
 
-                </tbody>
+                            <input
+                                type="email"
+                                name="email"
+                                value="{{ $restoreAdd ? old('email') : '' }}"
+                                maxlength="255"
+                                required
+                                class="mt-2 w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs focus:outline-none focus:border-sage-600"
+                            >
+                        </label>
 
-            </table>
-        </div>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <label class="block text-xs font-semibold text-slate-700">
+                                Role
 
-        {{-- Pagination --}}
-        <div class="p-4 border-t border-slate-100">
-            {{ $users->links() }}
-        </div>
+                                <select
+                                    name="role"
+                                    required
+                                    class="mt-2 w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs"
+                                >
+                                    @foreach($availableRoles as $role => $label)
+                                        <option
+                                            value="{{ $role }}"
+                                            @selected(($restoreAdd ? old('role', 'mahasiswa') : 'mahasiswa') === $role)
+                                        >
+                                            {{ $label }}
+                                        </option>
+                                    @endforeach
+                                </select>
+                            </label>
 
+                            <label class="block text-xs font-semibold text-slate-700">
+                                Angkatan
+
+                                <span class="font-normal text-slate-400">
+                                    (opsional)
+                                </span>
+
+                                <input
+                                    type="number"
+                                    name="angkatan"
+                                    value="{{ $restoreAdd ? old('angkatan') : '' }}"
+                                    min="1901"
+                                    max="{{ date('Y') }}"
+                                    placeholder="Contoh: 2023"
+                                    class="mt-2 w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs"
+                                >
+                            </label>
+                        </div>
+
+                        <p class="text-[11px] text-slate-400 leading-relaxed">
+                            Angkatan boleh dikosongkan untuk semua role.
+                            Gunakan Email Google yang akan dipakai
+                            anggota untuk login.
+                        </p>
+
+                        <button
+                            type="submit"
+                            class="w-full bg-sage-600 hover:bg-sage-700 text-white font-bold py-3 rounded-xl text-xs transition"
+                        >
+                            Simpan Anggota Baru
+                        </button>
+                    </form>
+                </section>
+
+                <section class="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
+                    <div class="p-5 border-b border-slate-100 flex items-center gap-3">
+                        <div class="p-2.5 rounded-xl bg-sage-50 text-sage-600">
+                            <i
+                                data-lucide="file-spreadsheet"
+                                class="w-5 h-5"
+                            ></i>
+                        </div>
+
+                        <div>
+                            <h2 class="font-bold text-sm text-slate-800">
+                                Import dari Excel
+                            </h2>
+
+                            <p class="text-[11px] text-slate-400 mt-1">
+                                Tambahkan banyak anggota sekaligus.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="p-5 space-y-5">
+                        <div class="bg-sage-50 border border-sage-100 rounded-xl p-4 text-xs text-sage-800 leading-relaxed space-y-2">
+                            <p class="font-bold">
+                                Cara import anggota
+                            </p>
+
+                            <ol class="list-decimal pl-4 space-y-1">
+                                <li>Unduh template di bawah.</li>
+
+                                <li>
+                                    Isi nama, Email Google, role,
+                                    dan angkatan opsional.
+                                </li>
+
+                                <li>
+                                    Unggah file, periksa preview,
+                                    lalu konfirmasi.
+                                </li>
+                            </ol>
+                        </div>
+
+                        <a
+                            href="{{ route('members.template') }}"
+                            class="inline-flex items-center gap-2 text-xs font-bold text-sage-700 hover:underline"
+                        >
+                            <i
+                                data-lucide="file-down"
+                                class="w-4 h-4"
+                            ></i>
+
+                            Unduh Template Excel
+                        </a>
+
+                        <form
+                            method="POST"
+                            action="{{ route('members.preview') }}"
+                            enctype="multipart/form-data"
+                            class="space-y-4"
+                        >
+                            @csrf
+
+                            <label class="block text-xs font-semibold text-slate-700">
+                                File Excel Anggota
+
+                                <input
+                                    type="file"
+                                    name="workbook"
+                                    accept=".xlsx"
+                                    required
+                                    class="mt-2 w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs file:mr-2 file:rounded-lg file:border-0 file:bg-sage-100 file:px-3 file:py-2 file:text-sage-700"
+                                >
+                            </label>
+
+                            <p class="text-[11px] text-slate-400 leading-relaxed">
+                                Format .xlsx, maksimal 2 MB dan
+                                1.000 anggota. Angkatan kosong atau
+                                tanda - diperbolehkan.
+                                Email lama tidak ditimpa.
+                            </p>
+
+                            @unless($canManagePermissions)
+                                <p class="text-xs text-amber-700">
+                                    Akun Anda hanya dapat menambahkan
+                                    role mahasiswa dan ASDOS.
+                                </p>
+                            @endunless
+
+                            <button
+                                type="submit"
+                                class="w-full bg-sage-600 hover:bg-sage-700 text-white font-bold py-3 rounded-xl text-xs transition"
+                            >
+                                Periksa & Preview Excel
+                            </button>
+                        </form>
+                    </div>
+                </section>
+            </div>
+        @else
+            <section class="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
+                <div class="p-5 space-y-4 border-b border-slate-100">
+                    <div class="flex flex-wrap justify-between items-center gap-3">
+                        <h2 class="font-bold text-sm text-slate-800">
+                            Daftar Anggota
+                        </h2>
+
+                        <span class="text-[11px] font-semibold bg-sage-50 text-sage-700 px-3 py-1.5 rounded-lg">
+                            {{ $users->total() }} hasil
+                        </span>
+                    </div>
+
+                    <form
+                        method="GET"
+                        action="{{ route('admin.users') }}"
+                        class="flex flex-wrap gap-2"
+                    >
+                        <input
+                            type="hidden"
+                            name="tab"
+                            value="manage"
+                        >
+
+                        <label class="relative flex-1 min-w-[180px]">
+                            <span class="sr-only">
+                                Cari nama, email, atau role
+                            </span>
+
+                            <i
+                                data-lucide="search"
+                                class="absolute left-3 top-3 w-4 h-4 text-slate-400"
+                            ></i>
+
+                            <input
+                                type="search"
+                                name="search"
+                                value="{{ request('search') }}"
+                                maxlength="255"
+                                placeholder="Cari nama, email, atau role..."
+                                class="w-full pl-10 pr-3 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:border-sage-600"
+                            >
+                        </label>
+
+                        <button
+                            type="submit"
+                            class="bg-sage-600 hover:bg-sage-700 text-white px-5 py-3 rounded-xl text-xs font-bold"
+                        >
+                            Cari
+                        </button>
+
+                        @if(request()->filled('search'))
+                            <a
+                                href="{{ route('admin.users', ['tab' => 'manage']) }}"
+                                class="px-4 py-3 text-xs font-semibold text-slate-500 hover:bg-slate-50 rounded-xl"
+                            >
+                                Reset
+                            </a>
+                        @endif
+                    </form>
+                </div>
+
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left border-collapse">
+                        <thead>
+                            <tr class="bg-slate-50 text-[11px] font-bold text-slate-500 uppercase border-b border-slate-200/80">
+                                <th scope="col" class="p-4">
+                                    Nama Lengkap
+                                </th>
+
+                                <th scope="col" class="p-4">
+                                    Email Google
+                                </th>
+
+                                <th scope="col" class="p-4">
+                                    Role
+                                </th>
+
+                                <th scope="col" class="p-4">
+                                    Angkatan
+                                </th>
+
+                                <th scope="col" class="p-4">
+                                    Terdaftar
+                                </th>
+
+                                <th scope="col" class="p-4 text-center">
+                                    Aksi
+                                </th>
+                            </tr>
+                        </thead>
+
+                        <tbody class="divide-y divide-slate-100 text-xs text-slate-700">
+                            @forelse($users as $user)
+                                @php
+                                    $canEditUser = $canManagePermissions
+                                        || in_array(
+                                            $user->role,
+                                            ['mahasiswa', 'asdos'],
+                                            true
+                                        );
+                                @endphp
+
+                                <tr class="hover:bg-slate-50/50 transition">
+                                    <td class="p-4 font-bold text-slate-800">
+                                        {{ $user->name }}
+                                    </td>
+
+                                    <td class="p-4">
+                                        {{ $user->email }}
+                                    </td>
+
+                                    <td class="p-4">
+                                        <span class="px-2.5 py-1 rounded-lg bg-sage-50 text-sage-700 text-[10px] font-bold uppercase">
+                                            {{ config('cms.roles.'.$user->role, $user->role) }}
+                                        </span>
+                                    </td>
+
+                                    <td class="p-4 text-slate-500">
+                                        {{ $user->angkatan ?? '-' }}
+                                    </td>
+
+                                    <td class="p-4 text-slate-400 whitespace-nowrap">
+                                        {{ $user->created_at?->format('d M Y') ?? '-' }}
+                                    </td>
+
+                                    <td class="p-4">
+                                        @if($canEditUser)
+                                            <div class="flex items-center justify-center gap-2">
+                                                <button
+                                                    type="button"
+                                                    data-edit-user
+                                                    data-user-id="{{ $user->id }}"
+                                                    data-user-name="{{ $user->name }}"
+                                                    data-user-email="{{ $user->email }}"
+                                                    data-user-role="{{ $user->role }}"
+                                                    data-user-angkatan="{{ $user->angkatan ?? '' }}"
+                                                    data-update-url="{{ route('admin.users.update', $user->id) }}"
+                                                    class="p-2 text-blue-500 hover:bg-blue-50 rounded-lg transition"
+                                                    title="Edit anggota"
+                                                    aria-label="Edit {{ $user->name }}"
+                                                >
+                                                    <i
+                                                        data-lucide="pencil"
+                                                        class="w-4 h-4"
+                                                    ></i>
+                                                </button>
+
+                                                @if($user->id !== auth()->id())
+                                                    <form
+                                                        method="POST"
+                                                        action="{{ route('admin.users.destroy', $user->id) }}"
+                                                        onsubmit="return confirm('Hapus akun ini? Akun yang memiliki laporan tidak dapat dihapus.');"
+                                                    >
+                                                        @csrf
+                                                        @method('DELETE')
+
+                                                        <button
+                                                            type="submit"
+                                                            class="p-2 text-rose-500 hover:bg-rose-50 rounded-lg transition"
+                                                            title="Hapus anggota"
+                                                            aria-label="Hapus {{ $user->name }}"
+                                                        >
+                                                            <i
+                                                                data-lucide="trash-2"
+                                                                class="w-4 h-4"
+                                                            ></i>
+                                                        </button>
+                                                    </form>
+                                                @endif
+                                            </div>
+                                        @else
+                                            <span class="text-[11px] text-slate-400">
+                                                Akses terbatas
+                                            </span>
+                                        @endif
+                                    </td>
+                                </tr>
+                            @empty
+                                <tr>
+                                    <td
+                                        colspan="6"
+                                        class="p-10 text-center text-slate-400"
+                                    >
+                                        {{ request()->filled('search') ? 'Tidak ada anggota yang cocok dengan pencarian.' : 'Belum ada anggota terdaftar.' }}
+                                    </td>
+                                </tr>
+                            @endforelse
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="p-4 border-t border-slate-100">
+                    {{ $users->links() }}
+                </div>
+            </section>
+        @endif
     </div>
-</div>
 
-
-{{-- ========================================================= --}}
-{{-- MODAL TAMBAH USER --}}
-{{-- ========================================================= --}}
-
-<div
-    id="add-user-modal"
-    class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden"
->
-
-    <div
-        class="bg-white max-w-md w-full rounded-2xl p-6 space-y-5 shadow-xl border border-slate-100"
+    <dialog
+        id="edit-user-dialog"
+        aria-labelledby="edit-user-title"
+        class="rounded-2xl p-0 w-[calc(100%-2rem)] max-w-lg max-h-[90vh] overflow-y-auto shadow-xl backdrop:bg-slate-900/50"
     >
-
-        {{-- Header --}}
-        <div class="flex items-center justify-between border-b border-slate-100 pb-3">
-
+        <div class="p-5 border-b border-slate-100 flex items-center justify-between gap-3">
             <div>
-                <h3 class="text-sm font-bold text-slate-800">
-                    Tambah User Baru
-                </h3>
+                <h2
+                    id="edit-user-title"
+                    class="font-bold text-base text-slate-800"
+                >
+                    Edit Anggota
+                </h2>
 
-                <p class="text-[10px] text-slate-400 mt-0.5">
-                    Tambahkan pengguna yang diizinkan login
+                <p class="text-xs text-slate-400 mt-1">
+                    Perbarui informasi akun yang dipilih.
                 </p>
             </div>
 
             <button
                 type="button"
-                onclick="closeAddUserModal()"
-                class="text-slate-400 hover:text-slate-600"
+                data-close-edit
+                class="p-2 text-slate-400 hover:bg-slate-50 rounded-lg"
+                aria-label="Tutup edit anggota"
             >
-                <i data-lucide="x" class="w-4 h-4"></i>
+                <i
+                    data-lucide="x"
+                    class="w-5 h-5"
+                ></i>
             </button>
-
         </div>
 
-
-        {{-- Form --}}
-        <form
-            action="{{ route('admin.users.store') }}"
-            method="POST"
-            class="space-y-4"
-        >
-
-            @csrf
-
-            {{-- Nama --}}
-            <div>
-
-                <label class="block text-xs font-semibold text-slate-600 mb-1">
-                    Nama Lengkap
-                </label>
-
-                <input
-                    type="text"
-                    name="name"
-                    required
-                    placeholder="Nama User"
-                    value="{{ old('name') }}"
-                    class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-700 focus:outline-none focus:border-sage-600"
-                >
-
-            </div>
-
-
-            {{-- Email --}}
-            <div>
-
-                <label class="block text-xs font-semibold text-slate-600 mb-1">
-                    Email Google Domain
-                </label>
-
-                <input
-                    type="email"
-                    name="email"
-                    required
-                    placeholder="email@student.ciputra.ac.id"
-                    value="{{ old('email') }}"
-                    class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-700 focus:outline-none focus:border-sage-600"
-                >
-
-            </div>
-
-
-            {{-- Role + Angkatan --}}
-            <div class="grid grid-cols-2 gap-3">
-
-                {{-- Role --}}
-                <div>
-
-                    <label class="block text-xs font-semibold text-slate-600 mb-1">
-                        Role Akses
-                    </label>
-
-                    <select
-                        name="role"
-                        class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-700 focus:outline-none focus:border-sage-600"
-                    >
-
-                        <option value="mahasiswa">
-                            Mahasiswa
-                        </option>
-
-                        <option value="dosen">
-                            Dosen
-                        </option>
-
-                        <option value="admin">
-                            Admin
-                        </option>
-
-                    </select>
-
-                </div>
-
-
-                {{-- Angkatan --}}
-                <div>
-
-                    <label class="block text-xs font-semibold text-slate-600 mb-1">
-                        Angkatan (Opsional)
-                    </label>
-
-                    <input
-                        type="text"
-                        name="angkatan"
-                        placeholder="2026"
-                        value="{{ old('angkatan') }}"
-                        class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-700 focus:outline-none focus:border-sage-600"
-                    >
-
-                </div>
-
-            </div>
-
-
-            {{-- Buttons --}}
-            <div class="pt-2 flex justify-end gap-2">
-
-                <button
-                    type="button"
-                    onclick="closeAddUserModal()"
-                    class="px-4 py-2.5 rounded-xl border border-slate-200 text-xs font-medium text-slate-600 hover:bg-slate-50"
-                >
-                    Batal
-                </button>
-
-                <button
-                    type="submit"
-                    class="px-5 py-2.5 bg-sage-600 hover:bg-sage-700 text-white rounded-xl text-xs font-bold transition shadow-sm"
-                >
-                    Simpan User
-                </button>
-
-            </div>
-
-        </form>
-
-    </div>
-
-</div>
-
-
-{{-- ========================================================= --}}
-{{-- MODAL EDIT USER --}}
-{{-- ========================================================= --}}
-
-<div
-    id="edit-user-modal"
-    class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden"
->
-
-    <div
-        class="bg-white max-w-md w-full rounded-2xl p-6 space-y-5 shadow-xl border border-slate-100"
-    >
-
-        {{-- Header --}}
-        <div class="flex items-center justify-between border-b border-slate-100 pb-3">
-
-            <div>
-
-                <h3 class="text-sm font-bold text-slate-800">
-                    Edit User
-                </h3>
-
-                <p class="text-[10px] text-slate-400 mt-0.5">
-                    Perbarui informasi pengguna sistem
-                </p>
-
-            </div>
-
-            <button
-                type="button"
-                onclick="closeEditUserModal()"
-                class="text-slate-400 hover:text-slate-600"
-            >
-                <i data-lucide="x" class="w-4 h-4"></i>
-            </button>
-
-        </div>
-
-
-        {{-- Form Edit --}}
         <form
             id="edit-user-form"
             method="POST"
-            class="space-y-4"
+            class="p-5 space-y-4"
         >
-
             @csrf
             @method('PUT')
 
+            <input
+                type="hidden"
+                name="_user_form"
+                value="edit"
+            >
 
-            {{-- Nama --}}
-            <div>
+            <input
+                type="hidden"
+                name="edit_user_id"
+                id="edit-user-id"
+            >
 
-                <label class="block text-xs font-semibold text-slate-600 mb-1">
-                    Nama Lengkap
-                </label>
+            <label class="block text-xs font-semibold text-slate-700">
+                Nama Lengkap
 
                 <input
-                    type="text"
-                    id="edit-name"
+                    id="edit-user-name"
                     name="name"
+                    maxlength="255"
                     required
-                    class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-700 focus:outline-none focus:border-sage-600"
+                    class="mt-2 w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs focus:outline-none focus:border-sage-600"
                 >
+            </label>
 
-            </div>
-
-
-            {{-- Email --}}
-            <div>
-
-                <label class="block text-xs font-semibold text-slate-600 mb-1">
-                    Email Google Domain
-                </label>
+            <label class="block text-xs font-semibold text-slate-700">
+                Email Google
 
                 <input
+                    id="edit-user-email"
                     type="email"
-                    id="edit-email"
                     name="email"
+                    maxlength="255"
                     required
-                    class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-700 focus:outline-none focus:border-sage-600"
+                    class="mt-2 w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs focus:outline-none focus:border-sage-600"
                 >
+            </label>
 
-            </div>
-
-
-            {{-- Role + Angkatan --}}
-            <div class="grid grid-cols-2 gap-3">
-
-                {{-- Role --}}
-                <div>
-
-                    <label class="block text-xs font-semibold text-slate-600 mb-1">
-                        Role Akses
-                    </label>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <label class="block text-xs font-semibold text-slate-700">
+                    Role
 
                     <select
-                        id="edit-role"
+                        id="edit-user-role"
                         name="role"
-                        class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-700 focus:outline-none focus:border-sage-600"
+                        required
+                        class="mt-2 w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs"
                     >
-
-                        <option value="mahasiswa">
-                            Mahasiswa
-                        </option>
-
-                        <option value="dosen">
-                            Dosen
-                        </option>
-
-                        <option value="admin">
-                            Admin
-                        </option>
-
+                        @foreach($availableRoles as $role => $label)
+                            <option value="{{ $role }}">
+                                {{ $label }}
+                            </option>
+                        @endforeach
                     </select>
+                </label>
 
-                </div>
+                <label class="block text-xs font-semibold text-slate-700">
+                    Angkatan
 
-
-                {{-- Angkatan --}}
-                <div>
-
-                    <label class="block text-xs font-semibold text-slate-600 mb-1">
-                        Angkatan
-                    </label>
+                    <span class="font-normal text-slate-400">
+                        (opsional)
+                    </span>
 
                     <input
-                        type="text"
-                        id="edit-angkatan"
+                        id="edit-user-angkatan"
+                        type="number"
                         name="angkatan"
-                        placeholder="2026"
-                        class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-700 focus:outline-none focus:border-sage-600"
+                        min="1901"
+                        max="{{ date('Y') }}"
+                        class="mt-2 w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs"
                     >
-
-                </div>
-
+                </label>
             </div>
 
-
-            {{-- Buttons --}}
-            <div class="pt-2 flex justify-end gap-2">
-
+            <div class="flex justify-end gap-3 border-t border-slate-100 pt-4">
                 <button
                     type="button"
-                    onclick="closeEditUserModal()"
-                    class="px-4 py-2.5 rounded-xl border border-slate-200 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                    data-close-edit
+                    class="px-4 py-2.5 bg-slate-100 text-slate-600 rounded-xl text-xs font-semibold"
                 >
                     Batal
                 </button>
 
                 <button
                     type="submit"
-                    class="px-5 py-2.5 bg-sage-600 hover:bg-sage-700 text-white rounded-xl text-xs font-bold transition shadow-sm"
+                    class="px-4 py-2.5 bg-sage-600 hover:bg-sage-700 text-white rounded-xl text-xs font-bold"
                 >
                     Simpan Perubahan
                 </button>
-
             </div>
-
         </form>
+    </dialog>
 
-    </div>
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const dialog = document.getElementById(
+                'edit-user-dialog'
+            );
 
-</div>
+            const form = document.getElementById(
+                'edit-user-form'
+            );
 
+            function openEdit(data) {
+                form.action = data.url;
 
-{{-- ========================================================= --}}
-{{-- JAVASCRIPT --}}
-{{-- ========================================================= --}}
+                document.getElementById(
+                    'edit-user-id'
+                ).value = data.id;
 
-<script>
+                document.getElementById(
+                    'edit-user-name'
+                ).value = data.name ?? '';
 
-    /* ==============================
-       ADD USER MODAL
-    ============================== */
+                document.getElementById(
+                    'edit-user-email'
+                ).value = data.email ?? '';
 
-    function openAddUserModal() {
+                document.getElementById(
+                    'edit-user-role'
+                ).value = data.role;
 
-        document
-            .getElementById('add-user-modal')
-            .classList
-            .remove('hidden');
+                document.getElementById(
+                    'edit-user-angkatan'
+                ).value = data.angkatan ?? '';
 
-    }
-
-
-    function closeAddUserModal() {
-
-        document
-            .getElementById('add-user-modal')
-            .classList
-            .add('hidden');
-
-    }
-
-
-    /* ==============================
-       EDIT USER MODAL
-    ============================== */
-
-    function openEditUserModal(
-        id,
-        name,
-        email,
-        role,
-        angkatan
-    ) {
-
-        const modal =
-            document.getElementById('edit-user-modal');
-
-        const form =
-            document.getElementById('edit-user-form');
-
-
-        // Set URL form update
-        form.action = `/admin/users/${id}`;
-
-
-        // Isi data user
-        document.getElementById('edit-name').value =
-            name || '';
-
-        document.getElementById('edit-email').value =
-            email || '';
-
-        document.getElementById('edit-role').value =
-            role || 'mahasiswa';
-
-        document.getElementById('edit-angkatan').value =
-            angkatan || '';
-
-
-        // Tampilkan modal
-        modal.classList.remove('hidden');
-
-
-        // Refresh Lucide Icons
-        if (typeof lucide !== 'undefined') {
-            lucide.createIcons();
-        }
-
-    }
-
-
-    function closeEditUserModal() {
-
-        document
-            .getElementById('edit-user-modal')
-            .classList
-            .add('hidden');
-
-    }
-
-
-    /* ==============================
-       CLICK OUTSIDE MODAL
-    ============================== */
-
-    document.addEventListener('DOMContentLoaded', function () {
-
-        const addModal =
-            document.getElementById('add-user-modal');
-
-        const editModal =
-            document.getElementById('edit-user-modal');
-
-
-        if (addModal) {
-
-            addModal.addEventListener('click', function (event) {
-
-                if (event.target === addModal) {
-                    closeAddUserModal();
-                }
-
-            });
-
-        }
-
-
-        if (editModal) {
-
-            editModal.addEventListener('click', function (event) {
-
-                if (event.target === editModal) {
-                    closeEditUserModal();
-                }
-
-            });
-
-        }
-
-
-        // Escape untuk menutup modal
-        document.addEventListener('keydown', function (event) {
-
-            if (event.key === 'Escape') {
-
-                closeAddUserModal();
-                closeEditUserModal();
-
+                dialog.showModal();
             }
 
+            document.querySelectorAll(
+                '[data-edit-user]'
+            ).forEach(function (button) {
+                button.addEventListener('click', function () {
+                    openEdit({
+                        url: button.dataset.updateUrl,
+                        id: button.dataset.userId,
+                        name: button.dataset.userName,
+                        email: button.dataset.userEmail,
+                        role: button.dataset.userRole,
+                        angkatan: button.dataset.userAngkatan,
+                    });
+                });
+            });
+
+            document.querySelectorAll(
+                '[data-close-edit]'
+            ).forEach(function (button) {
+                button.addEventListener('click', function () {
+                    dialog.close();
+                });
+            });
+
+            const failedEdit = @json($reopenEdit);
+
+            if (failedEdit) {
+                openEdit(failedEdit);
+            }
         });
-
-    });
-
-</script>
-
+    </script>
 @endsection

@@ -2,35 +2,74 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\ActivityLog;
+use App\Models\Document;
 use App\Models\TemporaryPermission;
 use App\Models\User;
-use App\Models\Document;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
-use Carbon\Carbon;
 
 class AccessPermissionController extends Controller
 {
-    // Form Beri Akses
     public function create()
     {
-        $documents = Document::where('status', 'open')->get();
-        return view('admin-grant-access', compact('documents'));
+        $documents = Document::published()->get();
+
+        return view(
+            'admin-grant-access',
+            compact('documents')
+        );
     }
 
-    // Eksekusi Simpan Akses
     public function store(Request $request)
     {
         $request->validate([
             'target_type' => 'required|in:single,angkatan,all',
+
             'duration_type' => 'required|in:default,custom',
+
+            'user_email' => [
+                'nullable',
+                'required_if:target_type,single',
+                'email',
+                'exists:users,email',
+            ],
+
+            'target_angkatan' => 'nullable'
+                .'|required_if:target_type,angkatan'
+                .'|integer|between:1901,'.date('Y'),
+
+            'expired_at' => [
+                'nullable',
+                'required_if:duration_type,custom',
+                'date',
+                'after:now',
+            ],
+
+            'document_id' => 'nullable|exists:documents,id',
+
+            'can_read' => 'nullable|boolean',
+
+            'can_upload' => 'nullable|boolean',
         ]);
 
-        // Kalkulasi Waktu Expired
-        if ($request->duration_type === 'custom' && $request->filled('expired_at')) {
-            $expiredAt = Carbon::parse($request->expired_at);
-        } else {
-            $expiredAt = Carbon::now()->addDays(3); // Default 3 Hari
+        $canRead = $request->boolean('can_read');
+        $canUpload = $request->boolean('can_upload');
+
+        if (! $canRead && ! $canUpload) {
+            return back()
+                ->withErrors([
+                    'can_read' => 'Pilih minimal satu izin.',
+                ])
+                ->withInput();
+        }
+
+        if ($canUpload && $request->filled('document_id')) {
+            return back()
+                ->withErrors([
+                    'document_id' => 'Izin upload berlaku global; '
+                        .'pilih Semua Dokumen.',
+                ])
+                ->withInput();
         }
 
         $userId = null;
@@ -38,10 +77,11 @@ class AccessPermissionController extends Controller
         $isAllStudents = false;
 
         if ($request->target_type === 'single') {
-            $user = User::where('email', $request->user_email)->first();
-            if (!$user) {
-                return back()->withErrors(['user_email' => 'Email mahasiswa tidak ditemukan.']);
-            }
+            $user = User::where(
+                'email',
+                $request->user_email
+            )->firstOrFail();
+
             $userId = $user->id;
         } elseif ($request->target_type === 'angkatan') {
             $targetAngkatan = $request->target_angkatan;
@@ -49,19 +89,29 @@ class AccessPermissionController extends Controller
             $isAllStudents = true;
         }
 
-        // Simpan Record Temporary Permission
+        $expiredAt = $request->duration_type === 'custom'
+            ? $request->expired_at
+            : now()->addDays(3);
+
         TemporaryPermission::create([
             'user_id' => $userId,
             'target_angkatan' => $targetAngkatan,
             'is_all_students' => $isAllStudents,
-            'document_id' => $request->document_id ?: null,
-            'can_read' => $request->has('can_read'),
-            'can_download' => $request->has('can_download'),
-            'can_upload' => $request->has('can_upload'),
+            'document_id' => $request->document_id,
+            'can_read' => $canRead,
+            'can_upload' => $canUpload,
             'expired_at' => $expiredAt,
-            'granted_by' => Auth::id(),
+            'granted_by' => $request->user()->id,
         ]);
 
-        return redirect()->back()->with('success', 'Izin akses berhasil diberikan dan berlaku hingga ' . $expiredAt->format('d M Y H:i'));
+        ActivityLog::record(
+            'GRANT_ACCESS',
+            'Izin sementara diberikan'
+        );
+
+        return back()->with(
+            'success',
+            'Izin sementara berhasil diberikan.'
+        );
     }
 }

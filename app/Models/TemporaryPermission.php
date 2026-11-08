@@ -12,7 +12,6 @@ class TemporaryPermission extends Model
         'is_all_students',
         'document_id',
         'can_read',
-        'can_download',
         'can_upload',
         'expired_at',
         'granted_by',
@@ -22,28 +21,27 @@ class TemporaryPermission extends Model
         'target_angkatan' => 'integer',
         'is_all_students' => 'boolean',
         'can_read' => 'boolean',
-        'can_download' => 'boolean',
         'can_upload' => 'boolean',
-        'expired_at' => 'datetime', // Otomatis dikonversi ke Carbon Instance
+        'expired_at' => 'datetime',
     ];
 
-    // Scope untuk mengecek apakah izin masih berlaku (Belum Expired)
-    public function scopeActive($query) {
+    public function scopeActive($query)
+    {
         return $query->where('expired_at', '>', now());
     }
 
-    // Relasi: Penerima akses jika ditembak per individu satu mahasiswa
-    public function user() {
+    public function user()
+    {
         return $this->belongsTo(User::class, 'user_id');
     }
 
-    // Relasi: Dokumen target (bisa null jika akses bersifat global untuk semua dokumen)
-    public function document() {
+    public function document()
+    {
         return $this->belongsTo(Document::class);
     }
 
-    // Relasi: Dosen/Admin yang memberikan akses ini
-    public function grantor() {
+    public function grantor()
+    {
         return $this->belongsTo(User::class, 'granted_by');
     }
 }

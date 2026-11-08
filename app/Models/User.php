@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Facades\DB;
 
 class User extends Authenticatable
 {
@@ -28,11 +29,7 @@ class User extends Authenticatable
         'angkatan' => 'integer',
     ];
 
-    /*
-    |--------------------------------------------------------------------------
-    | ROLE
-    |--------------------------------------------------------------------------
-    */
+    private ?array $effectivePermissions = null;
 
     public function isAdmin(): bool
     {
@@ -49,140 +46,106 @@ class User extends Authenticatable
         return $this->role === 'mahasiswa';
     }
 
+    public function isAsdos(): bool
+    {
+        return $this->role === 'asdos';
+    }
 
-    /*
-    |--------------------------------------------------------------------------
-    | CEK AKSES SISTEM / KATALOG
-    |--------------------------------------------------------------------------
-    */
+    public function permits(string $permission): bool
+    {
+        if (! array_key_exists($permission, config('cms.permissions'))) {
+            return false;
+        }
+
+        if ($this->effectivePermissions === null) {
+            $defaults = config('cms.defaults.'.$this->role, []);
+
+            $map = array_fill_keys(
+                array_keys(config('cms.permissions')),
+                in_array('*', $defaults, true)
+            );
+
+            foreach ($defaults as $permissionName) {
+                if ($permissionName !== '*') {
+                    $map[$permissionName] = true;
+                }
+            }
+
+            $rolePermissions = DB::table('role_permissions')
+                ->where('role', $this->role)
+                ->get();
+
+            foreach ($rolePermissions as $rolePermission) {
+                $map[$rolePermission->permission] = (bool) $rolePermission->allowed;
+            }
+
+            $userPermissions = DB::table('user_permissions')
+                ->where('user_id', $this->id)
+                ->get();
+
+            foreach ($userPermissions as $userPermission) {
+                $map[$userPermission->permission] = (bool) $userPermission->allowed;
+            }
+
+            $this->effectivePermissions = $map;
+        }
+
+        return $this->effectivePermissions[$permission] ?? false;
+    }
+
+    public function activePermissions()
+    {
+        return TemporaryPermission::where('expired_at', '>', now())
+            ->where(function ($query) {
+                $query->where('user_id', $this->id);
+
+                if ($this->isMahasiswa()) {
+                    $query->orWhere('is_all_students', true);
+
+                    if ($this->angkatan) {
+                        $query->orWhere('target_angkatan', $this->angkatan);
+                    }
+                }
+            });
+    }
 
     public function hasAnyActiveAccess(): bool
     {
-        // Admin dan Dosen selalu memiliki akses
-        if ($this->isAdmin() || $this->isDosen()) {
-            return true;
-        }
-
-        // Cek izin aktif: personal (user_id), per-angkatan, atau all mahasiswa
-        return TemporaryPermission::where('can_read', true)
-            ->where('expired_at', '>', now())
-            ->where(function ($query) {
-                $query->where('user_id', $this->id)
-                    ->orWhere('is_all_students', true)
-                    ->orWhere(function ($q) {
-                        if (!empty($this->angkatan)) {
-                            $q->where('target_angkatan', $this->angkatan);
-                        }
-                    });
-            })
-            ->exists();
+        return $this->permits('read')
+            && (
+                $this->permits('read_all')
+                || $this->activePermissions()
+                    ->where('can_read', true)
+                    ->exists()
+            );
     }
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | CEK AKSES UPLOAD
-    |--------------------------------------------------------------------------
-    |
-    | Digunakan untuk menentukan apakah menu Upload Dokumen
-    | boleh ditampilkan kepada mahasiswa.
-    |
-    */
 
     public function hasUploadPermission(): bool
     {
-        // Admin dan Dosen selalu boleh upload
-        if ($this->isAdmin() || $this->isDosen()) {
-            return true;
-        }
-
-        // Cek izin upload aktif: personal (user_id), per-angkatan, atau all mahasiswa
-        return TemporaryPermission::where('can_upload', true)
-            ->where('expired_at', '>', now())
-            ->where(function ($query) {
-                $query->where('user_id', $this->id)
-                    ->orWhere('is_all_students', true)
-                    ->orWhere(function ($q) {
-                        if (!empty($this->angkatan)) {
-                            $q->where('target_angkatan', $this->angkatan);
-                        }
-                    });
-            })
-            ->exists();
+        return $this->permits('upload')
+            && (
+                $this->permits('upload_direct')
+                || $this->activePermissions()
+                    ->where('can_upload', true)
+                    ->whereNull('document_id')
+                    ->exists()
+            );
     }
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | CEK AKSES DOKUMEN TERTENTU
-    |--------------------------------------------------------------------------
-    */
 
     public function hasAccessToDocument($documentId): bool
     {
-        // Admin dan Dosen selalu boleh membaca
-        if ($this->isAdmin() || $this->isDosen()) {
-            return true;
-        }
-
-        return TemporaryPermission::where('can_read', true)
-            ->where('expired_at', '>', now())
-            ->where(function ($query) use ($documentId) {
-                // Dokumen spesifik ATAU global ke semua dokumen
-                $query->where('document_id', $documentId)
-                    ->orWhereNull('document_id');
-            })
-            ->where(function ($query) {
-                $query->where('user_id', $this->id)
-                    ->orWhere('is_all_students', true)
-                    ->orWhere(function ($q) {
-                        if (!empty($this->angkatan)) {
-                            $q->where('target_angkatan', $this->angkatan);
-                        }
-                    });
-            })
-            ->exists();
+        return $this->permits('read')
+            && (
+                $this->permits('read_all')
+                || $this->activePermissions()
+                    ->where('can_read', true)
+                    ->where(function ($query) use ($documentId) {
+                        $query->where('document_id', $documentId)
+                            ->orWhereNull('document_id');
+                    })
+                    ->exists()
+            );
     }
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | CEK AKSES DOWNLOAD DOKUMEN
-    |--------------------------------------------------------------------------
-    */
-
-    public function hasDownloadPermission($documentId = null): bool
-    {
-        if ($this->isAdmin() || $this->isDosen()) {
-            return true;
-        }
-
-        return TemporaryPermission::where('can_download', true)
-            ->where('expired_at', '>', now())
-            ->where(function ($query) use ($documentId) {
-                if ($documentId) {
-                    $query->where('document_id', $documentId)
-                        ->orWhereNull('document_id');
-                }
-            })
-            ->where(function ($query) {
-                $query->where('user_id', $this->id)
-                    ->orWhere('is_all_students', true)
-                    ->orWhere(function ($q) {
-                        if (!empty($this->angkatan)) {
-                            $q->where('target_angkatan', $this->angkatan);
-                        }
-                    });
-            })
-            ->exists();
-    }
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | RELATIONSHIPS
-    |--------------------------------------------------------------------------
-    */
 
     public function documents()
     {

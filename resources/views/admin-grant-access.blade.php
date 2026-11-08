@@ -1,172 +1,374 @@
-@extends('layouts.app', ['title' => 'Beri Akses Sementara - Admin'])
+@extends('layouts.app', ['title' => 'Berikan Akses Sementara'])
 
 @section('content')
-<div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+    @php
+        $targetType = old('target_type', 'single');
+        $durationType = old('duration_type', 'default');
 
-    <!-- Header & Title -->
-    <div class="flex items-center justify-between">
+        $isReturningForm = (bool) old('_grant_form');
+
+        $readChecked = $isReturningForm
+            ? (bool) old('can_read', false)
+            : true;
+
+        $uploadChecked = (bool) old('can_upload', false);
+    @endphp
+
+    <div class="max-w-4xl mx-auto space-y-6">
         <div>
-            <h1 class="text-2xl font-bold text-slate-800 tracking-tight">Atur & Beri Akses Sementara</h1>
-            <p class="text-xs text-slate-500 mt-1">Kelola izin baca, download, atau upload dengan durasi auto-expired.</p>
+            <h1 class="text-2xl font-bold text-slate-800">
+                Berikan Akses Sementara
+            </h1>
+
+            <p class="text-sm text-slate-500 mt-2 leading-relaxed">
+                Berikan izin baca atau upload dengan batas waktu.
+                Pengaturan fitur pada Hak Akses tetap berlaku.
+            </p>
         </div>
-        <a href="{{ route('admin.dashboard') }}" class="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-sage-700 transition">
-            <i data-lucide="arrow-left" class="w-4 h-4"></i>
-            <span>Kembali ke Dashboard</span>
-        </a>
+
+        <form
+            action="{{ route('access.grant.store') }}"
+            method="POST"
+            id="grant-access-form"
+            class="bg-white p-5 sm:p-7 rounded-2xl border border-slate-200 space-y-6"
+        >
+            @csrf
+
+            <input
+                type="hidden"
+                name="_grant_form"
+                value="1"
+            >
+
+            <section class="space-y-4">
+                <h2 class="text-sm font-bold text-slate-800">
+                    1. Penerima Akses
+                </h2>
+
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <label class="border border-slate-200 rounded-xl p-4 flex items-start gap-3 cursor-pointer hover:border-sage-500">
+                        <input
+                            type="radio"
+                            name="target_type"
+                            value="single"
+                            @checked($targetType === 'single')
+                            class="mt-1 accent-[#4a6b5d]"
+                        >
+
+                        <span>
+                            <span class="block text-xs font-semibold text-slate-800">
+                                Satu Akun
+                            </span>
+
+                            <span class="block text-xs text-slate-400 mt-1">
+                                Berdasarkan Email Google
+                            </span>
+                        </span>
+                    </label>
+
+                    <label class="border border-slate-200 rounded-xl p-4 flex items-start gap-3 cursor-pointer hover:border-sage-500">
+                        <input
+                            type="radio"
+                            name="target_type"
+                            value="angkatan"
+                            @checked($targetType === 'angkatan')
+                            class="mt-1 accent-[#4a6b5d]"
+                        >
+
+                        <span>
+                            <span class="block text-xs font-semibold text-slate-800">
+                                Per Angkatan
+                            </span>
+
+                            <span class="block text-xs text-slate-400 mt-1">
+                                Mahasiswa pada angkatan tertentu
+                            </span>
+                        </span>
+                    </label>
+
+                    <label class="border border-slate-200 rounded-xl p-4 flex items-start gap-3 cursor-pointer hover:border-sage-500">
+                        <input
+                            type="radio"
+                            name="target_type"
+                            value="all"
+                            @checked($targetType === 'all')
+                            class="mt-1 accent-[#4a6b5d]"
+                        >
+
+                        <span>
+                            <span class="block text-xs font-semibold text-slate-800">
+                                Semua Mahasiswa
+                            </span>
+
+                            <span class="block text-xs text-slate-400 mt-1">
+                                Seluruh akun dengan role mahasiswa
+                            </span>
+                        </span>
+                    </label>
+                </div>
+
+                <label
+                    id="target-single-box"
+                    class="block text-xs font-semibold text-slate-700"
+                >
+                    Email Google Akun
+
+                    <input
+                        type="email"
+                        name="user_email"
+                        value="{{ old('user_email') }}"
+                        placeholder="nama@example.com"
+                        class="block mt-2 w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm"
+                    >
+                </label>
+
+                <label
+                    id="target-angkatan-box"
+                    class="block text-xs font-semibold text-slate-700"
+                >
+                    Angkatan Mahasiswa
+
+                    <input
+                        type="number"
+                        name="target_angkatan"
+                        value="{{ old('target_angkatan') }}"
+                        min="1901"
+                        max="{{ date('Y') }}"
+                        placeholder="Contoh: 2023"
+                        class="block mt-2 w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm"
+                    >
+                </label>
+            </section>
+
+            <section class="space-y-4 border-t border-slate-100 pt-5">
+                <h2 class="text-sm font-bold text-slate-800">
+                    2. Jenis Akses
+                </h2>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <label class="flex items-center gap-3 p-4 bg-slate-50 border border-slate-200 rounded-xl text-sm cursor-pointer">
+                        <input
+                            type="checkbox"
+                            name="can_read"
+                            value="1"
+                            @checked($readChecked)
+                            class="accent-[#4a6b5d]"
+                        >
+
+                        Izin Baca
+                    </label>
+
+                    <label class="flex items-center gap-3 p-4 bg-slate-50 border border-slate-200 rounded-xl text-sm cursor-pointer">
+                        <input
+                            type="checkbox"
+                            name="can_upload"
+                            id="grant-upload"
+                            value="1"
+                            @checked($uploadChecked)
+                            class="accent-[#4a6b5d]"
+                        >
+
+                        Izin Upload
+                    </label>
+                </div>
+
+                <label class="block text-xs font-semibold text-slate-700">
+                    Dokumen Target
+
+                    <select
+                        name="document_id"
+                        id="grant-document"
+                        class="block mt-2 w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm disabled:opacity-60"
+                    >
+                        <option value="">
+                            Semua Dokumen / Akses Global
+                        </option>
+
+                        @foreach($documents as $doc)
+                            <option
+                                value="{{ $doc->id }}"
+                                @selected(old('document_id') == $doc->id)
+                            >
+                                {{ $doc->title }} ({{ $doc->tahun }})
+                            </option>
+                        @endforeach
+                    </select>
+                </label>
+
+                <p class="text-xs text-slate-500 leading-relaxed">
+                    Untuk izin baca, Anda dapat memilih satu
+                    dokumen atau seluruh dokumen.
+                    Izin upload selalu berlaku secara global.
+                    Jika ingin memberi izin baca satu dokumen
+                    sekaligus izin upload, simpan sebagai dua
+                    pemberian akses terpisah.
+                </p>
+            </section>
+
+            <section class="space-y-4 border-t border-slate-100 pt-5">
+                <h2 class="text-sm font-bold text-slate-800">
+                    3. Masa Berlaku
+                </h2>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <label class="border border-slate-200 rounded-xl p-4 flex items-start gap-3 cursor-pointer">
+                        <input
+                            type="radio"
+                            name="duration_type"
+                            value="default"
+                            @checked($durationType === 'default')
+                            class="mt-1 accent-[#4a6b5d]"
+                        >
+
+                        <span>
+                            <span class="block text-xs font-semibold text-slate-800">
+                                Default — 3 Hari
+                            </span>
+
+                            <span class="block text-xs text-slate-400 mt-1">
+                                Berlaku selama 72 jam
+                            </span>
+                        </span>
+                    </label>
+
+                    <label class="border border-slate-200 rounded-xl p-4 flex items-start gap-3 cursor-pointer">
+                        <input
+                            type="radio"
+                            name="duration_type"
+                            value="custom"
+                            @checked($durationType === 'custom')
+                            class="mt-1 accent-[#4a6b5d]"
+                        >
+
+                        <span>
+                            <span class="block text-xs font-semibold text-slate-800">
+                                Tanggal & Jam Khusus
+                            </span>
+
+                            <span class="block text-xs text-slate-400 mt-1">
+                                Tentukan waktu berakhir
+                            </span>
+                        </span>
+                    </label>
+                </div>
+
+                <label
+                    id="duration-custom-box"
+                    class="block text-xs font-semibold text-slate-700"
+                >
+                    Waktu Berakhir — WIB
+
+                    <input
+                        type="datetime-local"
+                        name="expired_at"
+                        value="{{ old('expired_at') }}"
+                        min="{{ now()->format('Y-m-d\TH:i') }}"
+                        class="block mt-2 w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm"
+                    >
+                </label>
+            </section>
+
+            <button
+                type="submit"
+                class="w-full bg-sage-600 hover:bg-sage-700 text-white font-semibold py-3 rounded-xl text-sm transition"
+            >
+                Simpan Izin Akses
+            </button>
+        </form>
     </div>
 
-    <!-- Alert Success / Error Flash Message -->
-    @if (session('success'))
-        <div class="bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs p-4 rounded-xl flex items-center gap-2">
-            <i data-lucide="check-circle" class="w-4 h-4 flex-shrink-0"></i>
-            <span>{{ session('success') }}</span>
-        </div>
-    @endif
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const form = document.getElementById(
+                'grant-access-form'
+            );
 
-    <!-- Main Grant Access Form -->
-    <form action="{{ route('access.grant.store') }}" method="POST" class="bg-white p-6 sm:p-8 rounded-2xl border border-slate-200/80 shadow-sm space-y-6">
-        @csrf
+            const singleBox = document.getElementById(
+                'target-single-box'
+            );
 
-        <!-- 1. Target Penerima Akses -->
-        <div class="space-y-3">
-            <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider">1. Target Penerima Akses</label>
-            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <label class="border border-slate-200 rounded-xl p-3.5 flex items-start gap-3 cursor-pointer hover:border-sage-500 transition">
-                    <input type="radio" name="target_type" value="single" class="mt-0.5 text-sage-600 focus:ring-sage-500" checked onclick="toggleTargetInput('single')">
-                    <div>
-                        <span class="block text-xs font-semibold text-slate-800">1 Mahasiswa Spesifik</span>
-                        <span class="block text-[11px] text-slate-400 mt-0.5">Input via Email/NIM</span>
-                    </div>
-                </label>
+            const angkatanBox = document.getElementById(
+                'target-angkatan-box'
+            );
 
-                <label class="border border-slate-200 rounded-xl p-3.5 flex items-start gap-3 cursor-pointer hover:border-sage-500 transition">
-                    <input type="radio" name="target_type" value="angkatan" class="mt-0.5 text-sage-600 focus:ring-sage-500" onclick="toggleTargetInput('angkatan')">
-                    <div>
-                        <span class="block text-xs font-semibold text-slate-800">Per Angkatan</span>
-                        <span class="block text-[11px] text-slate-400 mt-0.5">Pilih tahun angkatan</span>
-                    </div>
-                </label>
+            const durationBox = document.getElementById(
+                'duration-custom-box'
+            );
 
-                <label class="border border-slate-200 rounded-xl p-3.5 flex items-start gap-3 cursor-pointer hover:border-sage-500 transition">
-                    <input type="radio" name="target_type" value="all" class="mt-0.5 text-sage-600 focus:ring-sage-500" onclick="toggleTargetInput('all')">
-                    <div>
-                        <span class="block text-xs font-semibold text-slate-800">Semua Mahasiswa</span>
-                        <span class="block text-[11px] text-slate-400 mt-0.5">Seluruh akun aktif</span>
-                    </div>
-                </label>
-            </div>
+            const upload = document.getElementById(
+                'grant-upload'
+            );
 
-            <!-- Dynamic Target Form Input -->
-            <div id="target-single-box" class="pt-2">
-                <label class="block text-xs font-medium text-slate-600 mb-1">Email Mahasiswa</label>
-                <input type="email" name="user_email" placeholder="mahasiswa@student.ciputra.ac.id" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-700 focus:outline-none focus:border-sage-600">
-            </div>
+            const documentSelect = document.getElementById(
+                'grant-document'
+            );
 
-            <div id="target-angkatan-box" class="pt-2 hidden">
-                <label class="block text-xs font-medium text-slate-600 mb-1">Pilih Angkatan</label>
-                <select name="target_angkatan" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-700 focus:outline-none focus:border-sage-600">
-                    <option value="2026">Angkatan 2026</option>
-                    <option value="2025">Angkatan 2025</option>
-                    <option value="2024">Angkatan 2024</option>
-                    <option value="2023">Angkatan 2023</option>
-                </select>
-            </div>
-        </div>
+            function syncTarget() {
+                const selected = form.querySelector(
+                    '[name="target_type"]:checked'
+                ).value;
 
-        <hr class="border-slate-100">
+                const singleInput = singleBox.querySelector(
+                    'input'
+                );
 
-        <!-- 2. Objek Dokumen Spesifik (Optional) -->
-        <div class="space-y-2">
-            <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider">2. Dokumen Target (Opsional)</label>
-            <select name="document_id" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-700 focus:outline-none focus:border-sage-600">
-                <option value="">Akses Global (Semua Dokumen / Izin Login Umum)</option>
-                @foreach($documents as $doc)
-                    <option value="{{ $doc->id }}">{{ $doc->title }} ({{ $doc->tahun }})</option>
-                @endforeach
-            </select>
-            <p class="text-[11px] text-slate-400">Pilih dokumen tertentu jika ingin membatasi izin hanya untuk 1 file PDF tersebut.</p>
-        </div>
+                const angkatanInput = angkatanBox.querySelector(
+                    'input'
+                );
 
-        <hr class="border-slate-100">
+                singleBox.hidden = selected !== 'single';
+                singleInput.required = selected === 'single';
+                singleInput.disabled = selected !== 'single';
 
-        <!-- 3. Checklist Akses yang Diberikan -->
-        <div class="space-y-3">
-            <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider">3. Akses Yang Diberikan</label>
-            <div class="grid grid-cols-3 gap-3">
-                <label class="flex items-center gap-2 p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-700 cursor-pointer">
-                    <input type="checkbox" name="can_read" value="1" class="rounded text-sage-600 focus:ring-sage-500" checked>
-                    <span>Izin Baca (View)</span>
-                </label>
-                <label class="flex items-center gap-2 p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-700 cursor-pointer">
-                    <input type="checkbox" name="can_download" value="1" class="rounded text-sage-600 focus:ring-sage-500">
-                    <span>Izin Download</span>
-                </label>
-                <label class="flex items-center gap-2 p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-700 cursor-pointer">
-                    <input type="checkbox" name="can_upload" value="1" class="rounded text-sage-600 focus:ring-sage-500">
-                    <span>Izin Upload</span>
-                </label>
-            </div>
-        </div>
+                angkatanBox.hidden = selected !== 'angkatan';
+                angkatanInput.required = selected === 'angkatan';
+                angkatanInput.disabled = selected !== 'angkatan';
+            }
 
-        <hr class="border-slate-100">
+            function syncDuration() {
+                const selected = form.querySelector(
+                    '[name="duration_type"]:checked'
+                ).value;
 
-        <!-- 4. Durasi Masa Berlaku Access (Auto Expired) -->
-        <div class="space-y-3">
-            <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider">4. Masa Berlaku Akses (Auto-Expired)</label>
-            
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <label class="border border-slate-200 rounded-xl p-3.5 flex items-start gap-3 cursor-pointer hover:border-sage-500 transition">
-                    <input type="radio" name="duration_type" value="default" class="mt-0.5 text-sage-600 focus:ring-sage-500" checked onclick="toggleDurationInput('default')">
-                    <div>
-                        <span class="block text-xs font-semibold text-slate-800">Default (3 Hari)</span>
-                        <span class="block text-[11px] text-slate-400 mt-0.5">Otomatis hangus dalam 72 jam</span>
-                    </div>
-                </label>
+                const input = durationBox.querySelector(
+                    'input'
+                );
 
-                <label class="border border-slate-200 rounded-xl p-3.5 flex items-start gap-3 cursor-pointer hover:border-sage-500 transition">
-                    <input type="radio" name="duration_type" value="custom" class="mt-0.5 text-sage-600 focus:ring-sage-500" onclick="toggleDurationInput('custom')">
-                    <div>
-                        <span class="block text-xs font-semibold text-slate-800">Kustom Tanggal & Jam</span>
-                        <span class="block text-[11px] text-slate-400 mt-0.5">Pilih tanggal spesifik</span>
-                    </div>
-                </label>
-            </div>
+                const custom = selected === 'custom';
 
-            <!-- Custom DateTime Picker -->
-            <div id="duration-custom-box" class="pt-2 hidden">
-                <label class="block text-xs font-medium text-slate-600 mb-1">Pilih Tanggal & Jam Kadaluarsa</label>
-                <input type="datetime-local" name="expired_at" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-700 focus:outline-none focus:border-sage-600">
-            </div>
-        </div>
+                durationBox.hidden = !custom;
+                input.required = custom;
+                input.disabled = !custom;
+            }
 
-        <!-- Submit Button -->
-        <div class="pt-4">
-            <button type="submit" class="w-full bg-sage-600 hover:bg-sage-700 text-white font-bold py-3.5 rounded-xl text-xs flex items-center justify-center gap-2 transition shadow-sm">
-                <i data-lucide="shield-check" class="w-4 h-4"></i>
-                <span>Simpan Akses & Kirim Notifikasi Email</span>
-            </button>
-        </div>
-    </form>
-</div>
+            function syncUploadScope() {
+                if (upload.checked) {
+                    documentSelect.value = '';
+                }
 
-<script>
-    function toggleTargetInput(type) {
-        document.getElementById('target-single-box').classList.add('hidden');
-        document.getElementById('target-angkatan-box').classList.add('hidden');
+                documentSelect.disabled = upload.checked;
+            }
 
-        if (type === 'single') {
-            document.getElementById('target-single-box').classList.remove('hidden');
-        } else if (type === 'angkatan') {
-            document.getElementById('target-angkatan-box').classList.remove('hidden');
-        }
-    }
+            form.querySelectorAll(
+                '[name="target_type"]'
+            ).forEach(function (input) {
+                input.addEventListener('change', syncTarget);
+            });
 
-    function toggleDurationInput(type) {
-        if (type === 'custom') {
-            document.getElementById('duration-custom-box').classList.remove('hidden');
-        } else {
-            document.getElementById('duration-custom-box').classList.add('hidden');
-        }
-    }
-</script>
+            form.querySelectorAll(
+                '[name="duration_type"]'
+            ).forEach(function (input) {
+                input.addEventListener('change', syncDuration);
+            });
+
+            upload.addEventListener(
+                'change',
+                syncUploadScope
+            );
+
+            syncTarget();
+            syncDuration();
+            syncUploadScope();
+        });
+    </script>
 @endsection

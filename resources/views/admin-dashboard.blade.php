@@ -1,122 +1,311 @@
-@extends('layouts.app', ['title' => 'Dashboard Admin - Repository PSY'])
+@extends('layouts.app', ['title' => 'Dashboard'])
 
 @section('content')
-<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+    @php
+        $statLabels = [
+            'visitor' => 'Visitor Unik',
+            'visits' => 'Kunjungan',
+            'reads' => 'Pembacaan Laporan',
+            'documents' => 'Laporan Terbit',
+            'pending' => 'Menunggu Review',
+        ];
 
-    <!-- Header Section -->
-    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-            <h1 class="text-2xl font-bold text-slate-800 tracking-tight">Dashboard Administrator</h1>
-            <p class="text-xs text-slate-500 mt-1">Ringkasan aktivitas sistem, statistik repositori, dan kontrol hak akses.</p>
-        </div>
+        $trendMaximum = max(
+            1,
+            collect($trend)->max('total') ?? 0
+        );
 
-        <!-- Quick Action Buttons -->
-        <div class="flex items-center space-x-2">
-            <a href="{{ route('access.grant.create') }}" class="bg-sage-600 hover:bg-sage-700 text-white font-medium px-4 py-2.5 rounded-xl text-xs flex items-center gap-2 transition shadow-sm">
-                <i data-lucide="shield-plus" class="w-4 h-4"></i>
-                <span>Beri Akses Sementara</span>
-            </a>
-            <a href="{{ route('lecturer.requests') }}" class="bg-slate-800 hover:bg-slate-900 text-white font-medium px-4 py-2.5 rounded-xl text-xs flex items-center gap-2 transition shadow-sm">
-                <i data-lucide="inbox" class="w-4 h-4"></i>
-                <span>List Permohonan</span>
-            </a>
-        </div>
-    </div>
+        $topMaximum = max(
+            1,
+            $top->max('total') ?? 0
+        );
 
-    <!-- Stats Cards Grid -->
-    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div class="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm flex items-center justify-between">
+        $caseTotal = $cases->sum('total');
+
+        $firstDate = $trend[0]['date'] ?? '-';
+
+        $lastDate = count($trend)
+            ? $trend[count($trend) - 1]['date']
+            : '-';
+    @endphp
+
+    <div class="max-w-7xl mx-auto space-y-6">
+        <div class="flex flex-wrap items-end justify-between gap-4">
             <div>
-                <p class="text-xs font-semibold text-slate-400">Total Dokumen</p>
-                <h3 class="text-2xl font-bold text-slate-800 mt-1">{{ $stats['total_documents'] }}</h3>
+                <h1 class="text-2xl font-bold text-slate-800">
+                    Dashboard
+                </h1>
+
+                <p class="text-sm text-slate-500 mt-2">
+                    Aktivitas {{ $days }} hari terakhir · WIB
+                </p>
             </div>
-            <div class="w-11 h-11 bg-sage-50 text-sage-600 rounded-xl flex items-center justify-center">
-                <i data-lucide="file-text" class="w-5 h-5"></i>
-            </div>
+
+            <form
+                method="GET"
+                action="{{ route('admin.dashboard') }}"
+                class="flex flex-wrap items-end gap-3"
+            >
+                <label class="block text-xs font-semibold text-slate-600">
+                    Periode Aktivitas
+
+                    <select
+                        name="days"
+                        class="block mt-2 border border-slate-200 bg-white rounded-xl p-3 text-sm"
+                    >
+                        @foreach([7, 30, 90] as $period)
+                            <option
+                                value="{{ $period }}"
+                                @selected($days === $period)
+                            >
+                                {{ $period }} hari
+                            </option>
+                        @endforeach
+                    </select>
+                </label>
+
+                <button
+                    type="submit"
+                    class="bg-sage-600 hover:bg-sage-700 text-white px-4 py-3 rounded-xl text-sm font-semibold transition"
+                >
+                    Tampilkan
+                </button>
+            </form>
         </div>
 
-        <div class="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm flex items-center justify-between">
+        <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
+            @foreach($statLabels as $key => $label)
+                <article class="bg-white border border-slate-200 rounded-2xl p-5">
+                    <h2 class="text-xs text-slate-500">
+                        {{ $label }}
+                    </h2>
+
+                    <p class="font-bold text-3xl text-sage-700 mt-3">
+                        {{ number_format($stats[$key], 0, ',', '.') }}
+                    </p>
+
+                    <p class="text-[11px] text-slate-400 mt-2">
+                        @if(in_array($key, ['documents', 'pending'], true))
+                            Jumlah saat ini
+                        @else
+                            {{ $days }} hari terakhir
+                        @endif
+                    </p>
+                </article>
+            @endforeach
+        </div>
+
+        <div class="bg-sage-50 border border-sage-100 rounded-xl p-4 text-xs text-sage-800 leading-relaxed space-y-2">
+            <p>
+                <strong>Visitor unik:</strong>
+                jumlah akun berbeda yang tercatat mengunjungi
+                aplikasi pada periode terpilih.
+            </p>
+
+            <p>
+                <strong>Kunjungan:</strong>
+                kunjungan baru dicatat setelah 30 menit tanpa
+                aktivitas halaman pada session tersebut.
+            </p>
+
+            <p>
+                <strong>Pembacaan laporan:</strong>
+                dihitung ketika reader dibuka dari katalog.
+                Preview untuk pemeriksaan laporan tidak dihitung.
+            </p>
+        </div>
+
+        <section class="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-5">
             <div>
-                <p class="text-xs font-semibold text-slate-400">Mahasiswa Aktif</p>
-                <h3 class="text-2xl font-bold text-slate-800 mt-1">{{ $stats['total_students'] }}</h3>
-            </div>
-            <div class="w-11 h-11 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center">
-                <i data-lucide="users" class="w-5 h-5"></i>
-            </div>
-        </div>
+                <h2 class="font-bold text-slate-800">
+                    Tren Kunjungan
+                </h2>
 
-        <div class="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm flex items-center justify-between">
-            <div>
-                <p class="text-xs font-semibold text-slate-400">Dosen Pembimbing</p>
-                <h3 class="text-2xl font-bold text-slate-800 mt-1">{{ $stats['total_lecturers'] }}</h3>
-            </div>
-            <div class="w-11 h-11 bg-purple-50 text-purple-600 rounded-xl flex items-center justify-center">
-                <i data-lucide="graduation-cap" class="w-5 h-5"></i>
-            </div>
-        </div>
-
-        <div class="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm flex items-center justify-between">
-            <div>
-                <p class="text-xs font-semibold text-slate-400">Permohonan Pending</p>
-                <h3 class="text-2xl font-bold text-amber-600 mt-1">{{ $stats['pending_requests'] }}</h3>
-            </div>
-            <div class="w-11 h-11 bg-amber-50 text-amber-600 rounded-xl flex items-center justify-center">
-                <i data-lucide="clock" class="w-5 h-5"></i>
-            </div>
-        </div>
-    </div>
-
-    <!-- Content Split Section: Logs & Documents -->
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-
-        <!-- Activity Logs Overview (2 Columns) -->
-        <div class="lg:col-span-2 bg-white p-6 rounded-2xl border border-slate-200/80 shadow-sm space-y-4">
-            <div class="flex items-center justify-between border-b border-slate-100 pb-3">
-                <div class="flex items-center space-x-2">
-                    <i data-lucide="activity" class="w-4 h-4 text-sage-600"></i>
-                    <h2 class="text-sm font-bold text-slate-800">Audit Trail Aktivitas Terbaru</h2>
-                </div>
-                <a href="{{ route('admin.logs') }}" class="text-xs font-semibold text-sage-600 hover:text-sage-800 transition">Lihat Semua Logs &rarr;</a>
+                <p class="text-xs text-slate-500 mt-2">
+                    Jumlah kunjungan aplikasi per hari.
+                    Arahkan kursor ke batang untuk melihat nilainya.
+                </p>
             </div>
 
-            <div class="space-y-3">
-                @forelse($latestLogs as $log)
-                    <div class="flex items-start justify-between p-3 bg-slate-50/70 rounded-xl border border-slate-100 text-xs">
-                        <div class="space-y-0.5">
-                            <div class="flex items-center gap-2">
-                                <span class="font-bold text-slate-800">{{ $log->user ? $log->user->name : 'Sistem' }}</span>
-                                <span class="px-2 py-0.5 text-[9px] font-bold uppercase rounded bg-slate-200 text-slate-700">{{ $log->action }}</span>
-                            </div>
-                            <p class="text-slate-500">{{ $log->description }}</p>
+            @if(collect($trend)->sum('total') === 0)
+                <p class="text-sm text-slate-400">
+                    Belum ada kunjungan tercatat pada periode ini.
+                </p>
+            @endif
+
+            <div class="overflow-x-auto">
+                <div
+                    class="flex items-end gap-1 h-44 min-w-[600px] border-b border-slate-200"
+                    role="img"
+                    aria-label="Grafik kunjungan harian dari {{ $firstDate }} sampai {{ $lastDate }}. Data lengkap tersedia pada bagian Lihat Data Harian."
+                >
+                    @foreach($trend as $point)
+                        @php
+                            $height = (
+                                $point['total'] / $trendMaximum
+                            ) * 100;
+                        @endphp
+
+                        <div class="flex-1 h-full flex items-end">
+                            <div
+                                class="w-full bg-sage-500 hover:bg-sage-700 rounded-t transition"
+                                style="height: {{ $height }}%; min-height: {{ $point['total'] ? 2 : 0 }}px;"
+                                title="{{ $point['date'] }}: {{ $point['total'] }} kunjungan"
+                            ></div>
                         </div>
-                        <span class="text-[10px] text-slate-400 font-mono">{{ $log->created_at->diffForHumans() }}</span>
+                    @endforeach
+                </div>
+
+                <div class="flex justify-between gap-4 text-xs text-slate-400 mt-3 min-w-[600px]">
+                    <span>{{ $firstDate }}</span>
+                    <span>{{ $lastDate }}</span>
+                </div>
+            </div>
+
+            <details class="text-sm">
+                <summary class="cursor-pointer font-semibold text-sage-700">
+                    Lihat Data Harian
+                </summary>
+
+                <div class="max-h-64 overflow-auto mt-4 border border-slate-100 rounded-xl">
+                    <table class="w-full text-left text-sm">
+                        <thead class="bg-slate-50">
+                            <tr>
+                                <th scope="col" class="p-3 text-slate-600">
+                                    Tanggal
+                                </th>
+
+                                <th scope="col" class="p-3 text-slate-600">
+                                    Kunjungan
+                                </th>
+                            </tr>
+                        </thead>
+
+                        <tbody>
+                            @foreach($trend as $point)
+                                <tr class="border-t border-slate-100">
+                                    <td class="p-3 text-slate-600">
+                                        {{ $point['date'] }}
+                                    </td>
+
+                                    <td class="p-3 font-semibold text-sage-700">
+                                        {{ number_format($point['total'], 0, ',', '.') }}
+                                    </td>
+                                </tr>
+                            @endforeach
+                        </tbody>
+                    </table>
+                </div>
+            </details>
+        </section>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <section class="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-5">
+                <div>
+                    <h2 class="font-bold text-slate-800">
+                        Laporan Paling Sering Dibaca
+                    </h2>
+
+                    <p class="text-xs text-slate-500 mt-2">
+                        Hingga 10 laporan teratas dalam
+                        {{ $days }} hari terakhir.
+                    </p>
+                </div>
+
+                @forelse($top as $entry)
+                    @php
+                        $width = (
+                            $entry->total / $topMaximum
+                        ) * 100;
+                    @endphp
+
+                    <div>
+                        <div class="flex justify-between items-start gap-4 text-sm">
+                            <p class="text-slate-600 break-words min-w-0">
+                                <span class="font-bold text-sage-700">
+                                    {{ $loop->iteration }}.
+                                </span>
+
+                                {{ $titles[$entry->document_id] ?? 'Laporan tidak tersedia' }}
+                            </p>
+
+                            <span class="font-bold text-sage-700 shrink-0">
+                                {{ number_format($entry->total, 0, ',', '.') }}
+                            </span>
+                        </div>
+
+                        <div class="bg-sage-50 rounded-full h-2 mt-3 overflow-hidden">
+                            <div
+                                class="bg-sage-500 rounded-full h-2"
+                                style="width: {{ $width }}%;"
+                                aria-hidden="true"
+                            ></div>
+                        </div>
                     </div>
                 @empty
-                    <p class="text-xs text-slate-400 py-4 text-center">Belum ada catatan aktivitas sistem.</p>
+                    <div class="bg-slate-50 rounded-xl p-6 text-center text-sm text-slate-500">
+                        Belum ada pembacaan laporan
+                        pada periode ini.
+                    </div>
                 @endforelse
-            </div>
-        </div>
+            </section>
 
-        <!-- Recent Uploaded Documents (1 Column) -->
-        <div class="lg:col-span-1 bg-white p-6 rounded-2xl border border-slate-200/80 shadow-sm space-y-4">
-            <div class="flex items-center space-x-2 border-b border-slate-100 pb-3">
-                <i data-lucide="file-up" class="w-4 h-4 text-sage-600"></i>
-                <h2 class="text-sm font-bold text-slate-800">Dokumen Terbaru</h2>
-            </div>
+            <section class="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-5">
+                <div>
+                    <h2 class="font-bold text-slate-800">
+                        Jenis Kasus Laporan Diterima
+                    </h2>
 
-            <div class="space-y-3">
-                @forelse($recentDocuments as $doc)
-                    <div class="p-3 bg-slate-50/70 rounded-xl border border-slate-100 space-y-1">
-                        <span class="text-[9px] font-bold text-sage-700 bg-sage-50 px-2 py-0.5 rounded">{{ $doc->category->name }}</span>
-                        <h4 class="text-xs font-bold text-slate-800 line-clamp-1">{{ $doc->title }}</h4>
-                        <p class="text-[10px] text-slate-400">Tahun: {{ $doc->tahun }} | Pembimbing: {{ $doc->dosen_pembimbing }}</p>
+                    <p class="text-xs text-slate-500 mt-2 leading-relaxed">
+                        Seluruh laporan yang sudah diterima,
+                        termasuk yang sedang disembunyikan.
+                        Tidak dibatasi periode aktivitas.
+                    </p>
+                </div>
+
+                @forelse($cases as $entry)
+                    @php
+                        $percentage = $caseTotal > 0
+                            ? ($entry->total / $caseTotal) * 100
+                            : 0;
+                    @endphp
+
+                    <div>
+                        <div class="flex justify-between items-start gap-3 text-sm">
+                            <p class="font-semibold text-slate-700">
+                                {{ $entry->case_type }}
+                            </p>
+
+                            <p class="text-slate-500">
+                                {{ number_format($entry->total, 0, ',', '.') }}
+                                laporan
+                                ·
+                                {{ number_format($percentage, 1, ',', '.') }}%
+                            </p>
+                        </div>
+
+                        <div class="bg-sage-50 h-3 rounded-full mt-3 overflow-hidden">
+                            <div
+                                class="bg-sage-500 h-3 rounded-full"
+                                style="width: {{ $percentage }}%;"
+                                aria-hidden="true"
+                            ></div>
+                        </div>
                     </div>
                 @empty
-                    <p class="text-xs text-slate-400 py-4 text-center">Belum ada dokumen diunggah.</p>
+                    <div class="bg-slate-50 rounded-xl p-6 text-center text-sm text-slate-500">
+                        Belum ada laporan yang diterima.
+                    </div>
                 @endforelse
-            </div>
-        </div>
 
+                @if($caseTotal > 0)
+                    <p class="text-xs text-slate-400 border-t border-slate-100 pt-4">
+                        Total:
+                        {{ number_format($caseTotal, 0, ',', '.') }}
+                        laporan diterima.
+                    </p>
+                @endif
+            </section>
+        </div>
     </div>
-</div>
 @endsection

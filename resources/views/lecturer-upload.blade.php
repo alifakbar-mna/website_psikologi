@@ -1,100 +1,313 @@
-@extends('layouts.app', ['title' => 'Upload Laporan Kasus - Dosen'])
+@extends('layouts.app', ['title' => 'Upload Laporan'])
 
 @section('content')
-<div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+@php
+    $uploadLimits = \App\Support\UploadLimits::current();
+@endphp
 
-    <div>
-        <h1 class="text-2xl font-bold text-slate-800 tracking-tight">Upload Laporan Kasus Baru</h1>
-        <p class="text-xs text-slate-500 mt-1">Unggah berkas PDF laporan kasus psikologi ke dalam repositori terlindungi.</p>
+<div class="max-w-4xl mx-auto space-y-6">
+    <div class="flex items-start gap-3">
+        <div class="p-3 bg-sage-100 text-sage-700 rounded-2xl">
+            <i data-lucide="files" class="w-6 h-6"></i>
+        </div>
+
+        <div>
+            <h1 class="text-2xl font-bold text-slate-800">
+                Upload Laporan Kasus
+            </h1>
+
+            <p class="text-xs text-slate-500 mt-2">
+                Tambahkan beberapa laporan sekaligus.
+                Isian disalin dari laporan terakhir;
+                judul dan PDF diisi kembali.
+            </p>
+
+            @unless(auth()->user()->permits('upload_direct'))
+                <p class="text-xs text-sage-700 mt-2">
+                    Laporan akan diperiksa admin sebelum tampil di katalog.
+                </p>
+            @endunless
+        </div>
     </div>
 
-    @if (session('success'))
-        <div class="bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs p-4 rounded-xl flex items-center gap-2">
-            <i data-lucide="check-circle" class="w-4 h-4 flex-shrink-0"></i>
-            <span>{{ session('success') }}</span>
-        </div>
-    @endif
+    <div
+        class="bg-sage-50 border border-sage-200 rounded-2xl p-4 text-xs text-sage-800 space-y-2"
+    >
+        <p>
+            Maksimal {{ $uploadLimits['maxFiles'] }} laporan per pengiriman.
+            Batas PDF aktif:
+            {{ round($uploadLimits['fileBytes'] / 1048576, 2) }}
+            MB per file.
+        </p>
 
-    <form action="{{ route('lecturer.upload.store') }}" method="POST" enctype="multipart/form-data" class="bg-white p-6 sm:p-8 rounded-2xl border border-slate-200/80 shadow-sm space-y-5">
+        @if($uploadLimits['postBytes'] > 0)
+            <p>
+                Batas total data server:
+                {{ round($uploadLimits['postBytes'] / 1048576, 2) }} MB,
+                termasuk seluruh file dan isian formulir.
+            </p>
+        @endif
+
+        <p id="upload-summary" aria-live="polite"></p>
+    </div>
+
+    <div
+        id="upload-errors"
+        role="alert"
+        tabindex="-1"
+        class="hidden bg-rose-50 border border-rose-200 text-rose-700 rounded-xl p-4 text-sm whitespace-pre-line"
+    ></div>
+
+    <form
+        method="POST"
+        action="{{ route('lecturer.upload.store') }}"
+        enctype="multipart/form-data"
+        id="batch-form"
+        class="space-y-5"
+    >
         @csrf
 
-        <div>
-            <label class="block text-xs font-bold text-slate-700 uppercase mb-1">Judul Laporan / Kasus</label>
-            <input type="text" name="title" value="{{ old('title') }}" required placeholder="Contoh: Intervensi CBT pada Kasus Gangguan Kecemasan Sosial" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-700 focus:outline-none focus:border-sage-600">
-            @error('title')
-                <p class="text-[10px] text-rose-500 mt-1">{{ $message }}</p>
-            @enderror
+        <div id="reports" class="space-y-5">
+            @foreach(old('reports', [[]]) as $index => $values)
+                <section
+                    class="report bg-white border border-slate-200 shadow-sm rounded-2xl p-5 sm:p-7 space-y-5"
+                >
+                    <div class="flex justify-between gap-3">
+                        <h2 class="font-bold text-slate-700 report-number">
+                            Laporan {{ $index + 1 }}
+                        </h2>
+
+                        <button
+                            type="button"
+                            class="remove-report text-xs text-rose-600"
+                        >
+                            Hapus laporan
+                        </button>
+                    </div>
+
+                    @include('cms.report-fields', [
+                        'prefix' => 'reports['.$index.'][',
+                        'suffix' => ']',
+                        'values' => $values,
+                    ])
+                </section>
+            @endforeach
         </div>
 
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-                <label class="block text-xs font-bold text-slate-700 uppercase mb-1">Kategori Psikologi</label>
-                <select name="category_id" required class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-700 focus:outline-none focus:border-sage-600">
-                    <option value="">-- Pilih Kategori --</option>
-                    @foreach($categories as $cat)
-                        <option value="{{ $cat->id }}" {{ old('category_id') == $cat->id ? 'selected' : '' }}>{{ $cat->name }}</option>
-                    @endforeach
-                </select>
-                @error('category_id')
-                    <p class="text-[10px] text-rose-500 mt-1">{{ $message }}</p>
-                @enderror
-            </div>
-            <div>
-                <label class="block text-xs font-bold text-slate-700 uppercase mb-1">Tahun Kasus</label>
-                <input type="number" name="tahun" value="{{ old('tahun', date('Y')) }}" required class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-700 focus:outline-none focus:border-sage-600">
-                @error('tahun')
-                    <p class="text-[10px] text-rose-500 mt-1">{{ $message }}</p>
-                @enderror
-            </div>
-        </div>
+        <button
+            type="button"
+            id="add-report"
+            class="w-full border-2 border-dashed border-sage-500 text-sage-700 rounded-xl p-4 text-sm font-bold disabled:opacity-40"
+        >
+            + Tambah Laporan
+        </button>
 
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div>
-                <label class="block text-xs font-bold text-slate-700 uppercase mb-1">Dosen Pembimbing</label>
-                <input type="text" name="dosen_pembimbing" required value="{{ old('dosen_pembimbing', Auth::user()->name) }}" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-700 focus:outline-none focus:border-sage-600">
-                @error('dosen_pembimbing')
-                    <p class="text-[10px] text-rose-500 mt-1">{{ $message }}</p>
-                @enderror
-            </div>
-            <div>
-                <label class="block text-xs font-bold text-slate-700 uppercase mb-1">Angkatan Pembuat</label>
-                <input type="number" name="angkatan_pembuat" value="{{ old('angkatan_pembuat') }}" placeholder="Contoh: 2022" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-700 focus:outline-none focus:border-sage-600">
-                @error('angkatan_pembuat')
-                    <p class="text-[10px] text-rose-500 mt-1">{{ $message }}</p>
-                @enderror
-            </div>
-            <div>
-                <label class="block text-xs font-bold text-slate-700 uppercase mb-1">Status Visibilitas</label>
-                <select name="status" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-700 focus:outline-none focus:border-sage-600">
-                    <option value="open" {{ old('status') == 'open' ? 'selected' : '' }}>Open (Dapat Dilihat)</option>
-                    <option value="hide" {{ old('status') == 'hide' ? 'selected' : '' }}>Hide (Sembunyikan Sementara)</option>
-                </select>
-            </div>
-        </div>
-
-        <div>
-            <label class="block text-xs font-bold text-slate-700 uppercase mb-1">Deskripsi Singkat / Abstrak</label>
-            <textarea name="description" rows="3" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-700 focus:outline-none focus:border-sage-600" placeholder="Ringkasan singkat mengenai metode intervensi dan subjek kasus...">{{ old('description') }}</textarea>
-            @error('description')
-                <p class="text-[10px] text-rose-500 mt-1">{{ $message }}</p>
-            @enderror
-        </div>
-
-        <div>
-            <label class="block text-xs font-bold text-slate-700 uppercase mb-1">File Dokumen PDF</label>
-            <input type="file" name="pdf_file" accept="application/pdf" required class="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-sage-50 file:text-sage-700 hover:file:bg-sage-100">
-            <p class="text-[11px] text-slate-400 mt-1">Format wajib .PDF dengan ukuran maksimal 10MB.</p>
-            @error('pdf_file')
-                <p class="text-[10px] text-rose-500 mt-1">{{ $message }}</p>
-            @enderror
-        </div>
-
-        <div class="pt-2">
-            <button type="submit" class="w-full bg-sage-600 hover:bg-sage-700 text-white font-bold py-3.5 rounded-xl text-xs flex items-center justify-center gap-2 transition shadow-sm">
-                <i data-lucide="upload-cloud" class="w-4 h-4"></i>
-                <span>Unggah Laporan Kasus</span>
-            </button>
-        </div>
+        <button
+            type="submit"
+            id="batch-submit"
+            class="w-full bg-sage-600 hover:bg-sage-700 text-white rounded-xl p-4 text-sm font-bold disabled:opacity-50"
+        >
+            Kirim Semua Laporan
+        </button>
     </form>
 </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const limits = @json($uploadLimits);
+
+    const form = document.getElementById('batch-form');
+    const reports = document.getElementById('reports');
+    const add = document.getElementById('add-report');
+    const submit = document.getElementById('batch-submit');
+    const errors = document.getElementById('upload-errors');
+    const summary = document.getElementById('upload-summary');
+
+    const mb = bytes => (
+        bytes / 1048576
+    ).toLocaleString('id-ID', {
+        maximumFractionDigits: 2,
+    }) + ' MB';
+
+    let sending = false;
+
+    function checkUpload() {
+        const messages = [];
+        let total = 0;
+        let count = 0;
+
+        if (!limits.enabled || limits.maxFiles < 1) {
+            messages.push(
+                'Upload file belum diaktifkan pada server. Hubungi pengelola.'
+            );
+        }
+
+        reports.querySelectorAll('.report').forEach((block, index) => {
+            const input = block.querySelector('[data-field="pdf_file"]');
+            const file = input.files[0];
+
+            input.setCustomValidity('');
+
+            if (!file) return;
+
+            total += file.size;
+            count++;
+
+            let message = '';
+
+            if (file.size > limits.fileBytes) {
+                message =
+                    `Laporan ${index + 1}: PDF ${mb(file.size)} `
+                    + `melampaui batas ${mb(limits.fileBytes)}.`;
+            } else if (
+                !/\.pdf$/i.test(file.name)
+                || (file.type && file.type !== 'application/pdf')
+            ) {
+                message = `Laporan ${index + 1}: pilih file PDF.`;
+            } else if (file.size === 0) {
+                message = `Laporan ${index + 1}: file PDF kosong.`;
+            }
+
+            if (message) {
+                input.setCustomValidity(message);
+                messages.push(message);
+            }
+        });
+
+        // Cadangan untuk boundary multipart, nama file,
+        // dan header setiap isian.
+        let estimated = total + 65536;
+        const encoder = new TextEncoder();
+
+        for (const [name, value] of new FormData(form).entries()) {
+            estimated += encoder.encode(name).length + 1024;
+
+            estimated += typeof value === 'string'
+                ? encoder.encode(value).length
+                : encoder.encode(value.name).length;
+        }
+
+        if (reports.children.length > limits.maxFiles) {
+            messages.push(
+                `Maksimal ${limits.maxFiles} laporan per pengiriman.`
+            );
+        }
+
+        if (
+            limits.postBytes > 0
+            && estimated > limits.postBytes
+        ) {
+            messages.push(
+                `Total file ${mb(total)} beserta isian dan cadangan `
+                + `pengiriman melebihi batas server ${mb(limits.postBytes)}. `
+                + 'Kurangi ukuran atau jumlah PDF.'
+            );
+        }
+
+        summary.textContent =
+            `${count} PDF dipilih · total file ${mb(total)}.`;
+
+        errors.textContent = messages.join('\n');
+        errors.classList.toggle('hidden', messages.length === 0);
+
+        submit.disabled = sending || messages.length > 0;
+
+        return messages.length === 0;
+    }
+
+    function renumber() {
+        reports.querySelectorAll('.report').forEach((block, index) => {
+            block.querySelector('.report-number').textContent =
+                'Laporan ' + (index + 1);
+
+            block.querySelector('.remove-report')
+                .classList.toggle(
+                    'hidden',
+                    reports.children.length === 1
+                );
+
+            block.querySelectorAll('[data-field]').forEach(input => {
+                input.name =
+                    `reports[${index}][${input.dataset.field}]`;
+            });
+        });
+
+        add.disabled =
+            reports.children.length >= limits.maxFiles
+            || !limits.enabled;
+
+        checkUpload();
+    }
+
+    add.addEventListener('click', () => {
+        if (
+            sending
+            || reports.children.length >= limits.maxFiles
+        ) {
+            return;
+        }
+
+        const last = reports.lastElementChild;
+        const copy = last.cloneNode(true);
+
+        last.querySelectorAll('[data-field]').forEach(source => {
+            const dest = copy.querySelector(
+                `[data-field="${source.dataset.field}"]`
+            );
+
+            dest.value = ['title', 'pdf_file'].includes(
+                source.dataset.field
+            ) ? '' : source.value;
+
+            dest.setCustomValidity('');
+        });
+
+        reports.append(copy);
+        renumber();
+
+        copy.querySelector('[data-field="title"]').focus();
+    });
+
+    reports.addEventListener('click', event => {
+        const button = event.target.closest('.remove-report');
+
+        if (
+            button
+            && !sending
+            && reports.children.length > 1
+        ) {
+            button.closest('.report').remove();
+            renumber();
+        }
+    });
+
+    form.addEventListener('input', checkUpload);
+    form.addEventListener('change', checkUpload);
+
+    form.addEventListener('submit', event => {
+        if (sending || !checkUpload()) {
+            event.preventDefault();
+
+            if (!sending) {
+                errors.focus();
+            }
+
+            return;
+        }
+
+        sending = true;
+        submit.disabled = true;
+        add.disabled = true;
+        submit.textContent = 'Mengunggah laporan…';
+    });
+
+    window.addEventListener('pageshow', () => {
+        sending = false;
+        submit.textContent = 'Kirim Semua Laporan';
+        renumber();
+    });
+
+    renumber();
+});
+</script>
 @endsection

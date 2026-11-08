@@ -1,215 +1,286 @@
 <?php
 
-use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\AccessPermissionController;
+use App\Http\Controllers\AdminController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\BookmarkLikeController;
+use App\Http\Controllers\CategoryController;
 use App\Http\Controllers\DocumentController;
 use App\Http\Controllers\DocumentRequestController;
-use App\Http\Controllers\AdminController;
+use App\Http\Controllers\MemberImportController;
+use App\Http\Controllers\PermissionController;
+use App\Http\Controllers\ReportController;
 use App\Http\Controllers\UserController;
-use App\Http\Controllers\CategoryController;
-use App\Http\Controllers\BookmarkLikeController;
-use App\Http\Controllers\AccessPermissionController;
-
-/*
-|--------------------------------------------------------------------------
-| Guest / Public Routes
-|--------------------------------------------------------------------------
-*/
+use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
-    return redirect()->route('login');
-});
+    if (! auth()->check()) {
+        return redirect()->route('login');
+    }
 
-Route::get('/login', function () {
-    return view('auth-login');
-})->name('login');
+    $destinations = [
+        'catalog' => 'student.catalog',
+        'dashboard' => 'admin.dashboard',
+        'approve_access' => 'lecturer.requests',
+        'upload' => 'reports.mine',
+        'manage_users' => 'admin.users',
+        'manage_permissions' => 'permissions.index',
+        'review_uploads' => 'reports.reviews',
+        'manage_documents' => 'reports.manage',
+        'request_access' => 'student.requests',
+        'manage_categories' => 'lecturer.categories',
+        'grant_access' => 'access.grant.create',
+        'activity_logs' => 'admin.logs',
+        'bookmarks' => 'student.bookmarks',
+    ];
 
-Route::get('/auth/google', [AuthController::class, 'redirectToGoogle'])
-    ->name('auth.google');
+    foreach ($destinations as $permission => $route) {
+        if (auth()->user()->permits($permission)) {
+            return redirect()->route($route);
+        }
+    }
 
-Route::get('/auth/google/callback', [AuthController::class, 'handleGoogleCallback']);
+    return response()->view('cms.no-access');
+})->name('home');
 
-Route::post('/logout', [AuthController::class, 'logout'])
-    ->name('logout');
+Route::view('/login', 'auth-login')
+    ->name('login');
 
+Route::get(
+    '/auth/google',
+    [AuthController::class, 'redirectToGoogle']
+)->name('auth.google');
 
-/*
-|--------------------------------------------------------------------------
-| Authenticated Routes
-|--------------------------------------------------------------------------
-*/
+Route::get(
+    '/auth/google/callback',
+    [AuthController::class, 'handleGoogleCallback']
+);
 
-Route::middleware(['auth'])->group(function () {
+Route::post(
+    '/logout',
+    [AuthController::class, 'logout']
+)->name('logout');
 
-    /*
-    |--------------------------------------------------------------------------
-    | REQUEST AKSES
-    |--------------------------------------------------------------------------
-    */
-
-    Route::get('/requests', [DocumentRequestController::class, 'studentIndex'])
-        ->name('student.requests');
-
-    Route::post('/requests', [DocumentRequestController::class, 'store'])
-        ->name('student.requests.store');
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | KATALOG & DOKUMEN MAHASISWA
-    |--------------------------------------------------------------------------
-    */
-
-    Route::get('/catalog', [DocumentController::class, 'index'])
+Route::middleware('auth')->group(function () {
+    Route::get(
+        '/catalog',
+        [DocumentController::class, 'index']
+    )
+        ->middleware('permission:catalog')
         ->name('student.catalog');
 
-    Route::get('/document/{id}', [DocumentController::class, 'show'])
+    Route::get(
+        '/document/{id}',
+        [DocumentController::class, 'show']
+    )
+        ->middleware('permission:read')
         ->name('student.document.show');
 
+    Route::get(
+        '/pdf/{filename}',
+        [DocumentController::class, 'stream']
+    )->name('pdf.stream');
 
-    /*
-    |--------------------------------------------------------------------------
-    | PDF
-    |--------------------------------------------------------------------------
-    */
+    Route::get(
+        '/reports/{id}/preview',
+        [DocumentController::class, 'preview']
+    )->name('reports.preview');
 
-    Route::get('/document/{id}/pdf', [DocumentController::class, 'pdf'])
-        ->name('document.pdf');
+    Route::middleware('permission:request_access')
+        ->group(function () {
+            Route::get(
+                '/requests',
+                [DocumentRequestController::class, 'studentIndex']
+            )->name('student.requests');
 
-    Route::get('/pdf/{filename}', [DocumentController::class, 'stream'])
-        ->name('pdf.stream');
+            Route::post(
+                '/requests',
+                [DocumentRequestController::class, 'store']
+            )->name('student.requests.store');
+        });
 
-    Route::get('/document/{id}/download', [DocumentController::class, 'download'])
-        ->name('pdf.download');
+    Route::middleware('permission:bookmarks')
+        ->group(function () {
+            Route::get(
+                '/student/bookmarks',
+                [BookmarkLikeController::class, 'index']
+            )->name('student.bookmarks');
 
+            Route::post(
+                '/document/{id}/bookmark',
+                [BookmarkLikeController::class, 'toggleBookmark']
+            )->name('document.bookmark');
 
-    /*
-    |--------------------------------------------------------------------------
-    | BOOKMARK & LIKE
-    |--------------------------------------------------------------------------
-    */
+            Route::post(
+                '/document/{id}/like',
+                [BookmarkLikeController::class, 'toggleLike']
+            )->name('document.like');
+        });
 
-    Route::get('/student/bookmarks', [BookmarkLikeController::class, 'index'])
-        ->name('student.bookmarks');
+    Route::middleware('permission:upload')
+        ->group(function () {
+            Route::get(
+                '/lecturer/upload',
+                [DocumentController::class, 'create']
+            )->name('lecturer.upload');
 
-    Route::post('/document/{id}/bookmark', [BookmarkLikeController::class, 'toggleBookmark'])
-        ->name('document.bookmark');
+            Route::post(
+                '/lecturer/upload',
+                [DocumentController::class, 'storeUpload']
+            )->name('lecturer.upload.store');
 
-    Route::post('/document/{id}/like', [BookmarkLikeController::class, 'toggleLike'])
-        ->name('document.like');
+            Route::get(
+                '/reports/mine',
+                [ReportController::class, 'mine']
+            )->name('reports.mine');
+        });
 
+    Route::get(
+        '/reports/{id}/edit',
+        [ReportController::class, 'edit']
+    )->name('reports.edit');
 
-    /*
-    |--------------------------------------------------------------------------
-    | UPLOAD LAPORAN
-    |--------------------------------------------------------------------------
-    |
-    | Admin/Dosen  -> langsung boleh
-    | Mahasiswa    -> hanya boleh jika memiliki can_upload aktif
-    |
-    | Permission mahasiswa akan dicek di DocumentController.
-    |
-    */
+    Route::put(
+        '/reports/{id}',
+        [ReportController::class, 'update']
+    )->name('reports.update');
 
-    Route::get('/lecturer/upload', [DocumentController::class, 'create'])
-        ->name('lecturer.upload');
+    Route::middleware('permission:review_uploads')
+        ->group(function () {
+            Route::get(
+                '/review-uploads',
+                [ReportController::class, 'reviews']
+            )->name('reports.reviews');
 
-    Route::post('/lecturer/upload', [DocumentController::class, 'storeUpload'])
-        ->name('lecturer.upload.store');
+            Route::post(
+                '/review-uploads/{id}',
+                [ReportController::class, 'decide']
+            )->name('reports.decide');
+        });
 
+    Route::get(
+        '/manage-reports',
+        [ReportController::class, 'manage']
+    )
+        ->middleware('permission:manage_documents')
+        ->name('reports.manage');
 
-    /*
-    |--------------------------------------------------------------------------
-    | DOSEN & ADMIN
-    |--------------------------------------------------------------------------
-    */
+    Route::middleware('permission:manage_categories')
+        ->group(function () {
+            Route::get(
+                '/lecturer/categories',
+                [CategoryController::class, 'index']
+            )->name('lecturer.categories');
 
-    Route::middleware(['role:dosen,admin'])->group(function () {
+            Route::post(
+                '/lecturer/categories',
+                [CategoryController::class, 'store']
+            )->name('lecturer.categories.store');
 
-        /*
-        |--------------------------------------------------------------------------
-        | KATEGORI
-        |--------------------------------------------------------------------------
-        */
+            Route::put(
+                '/lecturer/categories/{id}',
+                [CategoryController::class, 'update']
+            )->name('lecturer.categories.update');
 
-        Route::get('/lecturer/categories', [CategoryController::class, 'index'])
-            ->name('lecturer.categories');
+            Route::patch(
+                '/lecturer/categories/{id}/toggle',
+                [CategoryController::class, 'toggleHide']
+            )->name('lecturer.categories.toggle');
 
-        Route::post('/lecturer/categories', [CategoryController::class, 'store'])
-            ->name('lecturer.categories.store');
+            Route::delete(
+                '/lecturer/categories/{id}',
+                [CategoryController::class, 'destroy']
+            )->name('lecturer.categories.destroy');
+        });
 
-        Route::put('/lecturer/categories/{id}', [CategoryController::class, 'update'])
-            ->name('lecturer.categories.update');
+    Route::middleware('permission:approve_access')
+        ->group(function () {
+            Route::get(
+                '/lecturer/requests',
+                [DocumentRequestController::class, 'lecturerIndex']
+            )->name('lecturer.requests');
 
-        Route::patch('/lecturer/categories/{id}/toggle', [CategoryController::class, 'toggleHide'])
-            ->name('lecturer.categories.toggle');
+            Route::post(
+                '/lecturer/requests/{id}/process',
+                [DocumentRequestController::class, 'process']
+            )->name('lecturer.requests.process');
+        });
 
-        Route::delete('/lecturer/categories/{id}', [CategoryController::class, 'destroy'])
-            ->name('lecturer.categories.destroy');
+    Route::get(
+        '/admin/dashboard',
+        [AdminController::class, 'index']
+    )
+        ->middleware('permission:dashboard')
+        ->name('admin.dashboard');
 
+    Route::get(
+        '/admin/logs',
+        [AdminController::class, 'activityLogs']
+    )
+        ->middleware('permission:activity_logs')
+        ->name('admin.logs');
 
-        /*
-        |--------------------------------------------------------------------------
-        | APPROVAL REQUEST
-        |--------------------------------------------------------------------------
-        */
+    Route::middleware('permission:manage_users')
+        ->group(function () {
+            Route::get(
+                '/admin/users',
+                [UserController::class, 'index']
+            )->name('admin.users');
 
-        Route::get('/lecturer/requests', [DocumentRequestController::class, 'lecturerIndex'])
-            ->name('lecturer.requests');
+            Route::post(
+                '/admin/users',
+                [UserController::class, 'store']
+            )->name('admin.users.store');
 
-        Route::post('/lecturer/requests/{id}/process', [DocumentRequestController::class, 'process'])
-            ->name('lecturer.requests.process');
-    });
+            Route::put(
+                '/admin/users/{id}',
+                [UserController::class, 'update']
+            )->name('admin.users.update');
 
+            Route::delete(
+                '/admin/users/{id}',
+                [UserController::class, 'destroy']
+            )->name('admin.users.destroy');
 
-    /*
-    |--------------------------------------------------------------------------
-    | ADMIN ONLY
-    |--------------------------------------------------------------------------
-    */
+            Route::get(
+                '/admin/members/template',
+                [MemberImportController::class, 'template']
+            )->name('members.template');
 
-    Route::middleware(['role:admin'])->group(function () {
+            Route::post(
+                '/admin/members/preview',
+                [MemberImportController::class, 'preview']
+            )->name('members.preview');
 
-        /*
-        |--------------------------------------------------------------------------
-        | DASHBOARD
-        |--------------------------------------------------------------------------
-        */
+            Route::post(
+                '/admin/members/import',
+                [MemberImportController::class, 'store']
+            )->name('members.import');
+        });
 
-        Route::get('/admin/dashboard', [AdminController::class, 'index'])
-            ->name('admin.dashboard');
+    Route::middleware('permission:grant_access')
+        ->group(function () {
+            Route::get(
+                '/access/grant',
+                [AccessPermissionController::class, 'create']
+            )->name('access.grant.create');
 
-        Route::get('/admin/logs', [AdminController::class, 'activityLogs'])
-            ->name('admin.logs');
+            Route::post(
+                '/access/grant',
+                [AccessPermissionController::class, 'store']
+            )->name('access.grant.store');
+        });
 
+    Route::middleware('permission:manage_permissions')
+        ->group(function () {
+            Route::get(
+                '/admin/permissions',
+                [PermissionController::class, 'index']
+            )->name('permissions.index');
 
-        /*
-        |--------------------------------------------------------------------------
-        | KELOLA USER
-        |--------------------------------------------------------------------------
-        */
-
-        Route::get('/admin/users', [UserController::class, 'index'])
-            ->name('admin.users');
-
-        Route::post('/admin/users', [UserController::class, 'store'])
-            ->name('admin.users.store');
-
-        Route::delete('/admin/users/{id}', [UserController::class, 'destroy'])
-            ->name('admin.users.destroy');
-
-
-        /*
-        |--------------------------------------------------------------------------
-        | BERIKAN AKSES SEMENTARA
-        |--------------------------------------------------------------------------
-        */
-
-        Route::get('/access/grant', [AccessPermissionController::class, 'create'])
-            ->name('access.grant.create');
-
-        Route::post('/access/grant', [AccessPermissionController::class, 'store'])
-            ->name('access.grant.store');
-    });
-
+            Route::post(
+                '/admin/permissions',
+                [PermissionController::class, 'store']
+            )->name('permissions.store');
+        });
 });

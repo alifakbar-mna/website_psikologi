@@ -2,213 +2,191 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Document;
+use App\Models\ActivityLog;
 use App\Models\Category;
+use App\Models\Document;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Str;
-use setasign\Fpdi\Fpdi;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\Rule;
 
 class DocumentController extends Controller
 {
-    public function download($id)
+    public static function rules(bool $fileRequired = true): array
     {
-        $document = Document::findOrFail($id);
-        $user = auth()->user();
+        return [
+            'title' => 'required|string|max:255',
 
-        // Verifikasi Hak Akses
-        $isAdmin = $user->role === 'admin';
-        
-        $hasPermission = false;
-        if (!$isAdmin) {
-            $hasPermission = \App\Models\TemporaryPermission::where('user_id', $user->id)
-                ->where('can_download', true)
-                ->where('expired_at', '>', now())
-                ->where(function ($q) use ($document) {
-                    $q->where('document_id', $document->id)->orWhereNull('document_id');
-                })
-                ->exists();
-        }
+            'category_id' => [
+                'required',
+                Rule::exists('categories', 'id')
+                    ->where('is_hidden', false),
+            ],
 
-        if (!$isAdmin && !$hasPermission) {
-            abort(403, 'Anda tidak memiliki izin untuk mengunduh dokumen ini.');
-        }
+            'tahun' => 'required|integer|between:1901,'.date('Y'),
 
-        $fileName = basename($document->pdf_path);
-        $filePath = resource_path('pdf/' . $fileName);
+            'dosen_pembimbing' => 'required|string|max:255',
 
-        if (!file_exists($filePath)) {
-            $filePath = storage_path('app/' . $document->pdf_path);
-        }
+            'angkatan_pembuat' => 'nullable|integer|between:1901,'.date('Y'),
 
-        if (!file_exists($filePath)) {
-            abort(404, 'File dokumen tidak ditemukan.');
-        }
+            'case_type' => 'required|in:Individu,Kelompok',
 
-        // Gunakan FPDI untuk menyematkan watermark secara aman
-        try {
-            $pdf = new \setasign\Fpdi\Fpdi();
-            $pageCount = $pdf->setSourceFile($filePath);
+            'description' => 'nullable|string|max:20000',
 
-            $watermarkText = "Unduhan oleh: " . $user->name . " (" . $user->email . ") - Psikologi Universitas Ciputra";
+            'pdf_file' => [
+                $fileRequired ? 'required' : 'nullable',
+                'file',
+                'mimes:pdf',
+                'mimetypes:application/pdf',
+                'max:10240',
 
-            for ($pageNo = 1; $pageNo <= $pageCount; $pageNo++) {
-                $templateId = $pdf->importPage($pageNo);
-                $size = $pdf->getTemplateSize($templateId);
-
-                // Tangani format ukuran array/objek FPDI v2
-                $w = is_array($size) ? ($size['width'] ?? $size[0] ?? 210) : 210;
-                $h = is_array($size) ? ($size['height'] ?? $size[1] ?? 297) : 297;
-                $orientation = $w > $h ? 'L' : 'P';
-
-                // Tambahkan halaman dengan orientasi yang sesuai
-                $pdf->AddPage($orientation, [$w, $h]);
-                $pdf->useTemplate($templateId);
-
-                // Set styling watermark teks di bagian bawah
-                $pdf->SetFont('Helvetica', 'B', 9);
-                $pdf->SetTextColor(120, 120, 120); // Warna abu-abu
-
-                // Posisi watermark di bawah tengah halaman
-                $pdf->SetXY(10, $h - 10);
-                $pdf->Cell(0, 8, $watermarkText, 0, 0, 'C');
-            }
-
-            $downloadName = Str::slug($document->title) . '-watermarked.pdf';
-            
-            return response()->streamDownload(function () use ($pdf) {
-                echo $pdf->Output('S');
-            }, $downloadName, [
-                'Content-Type' => 'application/pdf',
-            ]);
-
-        } catch (\Throwable $e) {
-            // Tangkap error dengan benar menggunakan tanda panah (->)
-            dd($e->getMessage(), $e->getFile(), $e->getLine());
-        }
+                function ($attribute, $value, $fail) {
+                    if (
+                        $value instanceof UploadedFile
+                        && file_get_contents(
+                            $value->getRealPath(),
+                            false,
+                            null,
+                            0,
+                            5
+                        ) !== '%PDF-'
+                    ) {
+                        $fail('File harus berupa PDF yang valid.');
+                    }
+                },
+            ],
+        ];
     }
 
-    // Form Upload Dokumen
     public function create()
     {
-        $user = Auth::user();
-
-        if ($user->isMahasiswa() && !$user->hasUploadPermission()) {
-            abort(403, 'Anda tidak memiliki izin untuk mengunggah laporan.');
-        }
+        abort_unless(
+            auth()->user()->hasUploadPermission(),
+            403,
+            'Ajukan izin upload terlebih dahulu.'
+        );
 
         $categories = Category::where('is_hidden', false)->get();
 
-        return view('lecturer-upload', compact('categories'));
-    }
-
-    // Simpan Dokumen Upload PDF
-    public function storeUpload(Request $request)
-    {
-        $user = Auth::user();
-
-        if ($user->isMahasiswa() && !$user->hasUploadPermission()) {
-            abort(403, 'Anda tidak memiliki izin untuk mengunggah laporan.');
-        }
-
-        $request->validate([
-            'title' => 'required|string|max:255',
-            'category_id' => 'required|exists:categories,id',
-            'tahun' => 'required|numeric',
-            'dosen_pembimbing' => 'required|string',
-            'angkatan_pembuat' => 'nullable|numeric',
-            'pdf_file' => 'required|mimes:pdf|max:10240',
-        ]);
-
-        $file = $request->file('pdf_file');
-
-        $fileName = time() . '_' .
-            preg_replace(
-                '/[^A-Za-z0-9\-]/',
-                '',
-                str_replace(' ', '-', $request->title)
-            ) .
-            '.' .
-            $file->getClientOriginalExtension();
-
-        $destinationPath = resource_path('pdf');
-        $file->move($destinationPath, $fileName);
-
-        Document::create([
-            'title' => $request->title,
-            'category_id' => $request->category_id,
-            'tahun' => $request->tahun,
-            'dosen_pembimbing' => $request->dosen_pembimbing,
-            'angkatan_pembuat' => $request->angkatan_pembuat,
-            'description' => $request->description,
-            'status' => $request->status ?? 'open',
-            'pdf_path' => 'pdf/' . $fileName,
-            'uploaded_by' => Auth::id(),
-        ]);
-
-        return redirect()
-            ->back()
-            ->with(
-                'success',
-                'Dokumen PDF berhasil diunggah ke folder resources/pdf.'
-            );
-    }
-
-    // Halaman Read / Preview Detail Dokumen
-    public function show($id)
-    {
-        $document = Document::with(['category', 'uploader'])
-            ->findOrFail($id);
-
-        if ($document->category->is_hidden || $document->status === 'hide') {
-            abort(
-                403,
-                'Dokumen ini sedang disembunyikan oleh Dosen/Admin.'
-            );
-        }
-
-        // Cek akses baca untuk mahasiswa saat masuk ke detail dokumen
-        if (Auth::user()->isMahasiswa()) {
-            if (!Auth::user()->hasAccessToDocument($document->id)) {
-                return redirect()
-                    ->route('student.requests')
-                    ->with(
-                        'error',
-                        'Anda belum memiliki akses baca ke dokumen ini. Silakan ajukan permohonan baca terlebih dahulu.'
-                    );
-            }
-        }
-
         return view(
-            'student-document-detail',
-            compact('document')
+            'lecturer-upload',
+            compact('categories')
         );
     }
 
-    // Katalog Dokumen Mahasiswa (Mahasiswa sekarang bebas akses katalog tanpa redirect awal)
+    public function storeUpload(Request $request)
+    {
+        abort_unless(
+            $request->user()->hasUploadPermission(),
+            403,
+            'Izin upload tidak aktif.'
+        );
+
+        $rules = [
+            'reports' => 'required|array|min:1|max:10',
+        ];
+
+        foreach (self::rules() as $field => $fieldRules) {
+            $rules['reports.*.'.$field] = $fieldRules;
+        }
+
+        $data = $request->validate($rules);
+
+        $storedPaths = [];
+
+        try {
+            DB::transaction(function () use (
+                $data,
+                $request,
+                &$storedPaths
+            ) {
+                foreach ($data['reports'] as $index => $report) {
+                    $path = $request
+                        ->file("reports.$index.pdf_file")
+                        ->store('reports', 'local');
+
+                    if (! $path) {
+                        throw new \RuntimeException(
+                            'File gagal disimpan.'
+                        );
+                    }
+
+                    $storedPaths[] = $path;
+
+                    unset($report['pdf_file']);
+
+                    $directUpload = $request
+                        ->user()
+                        ->permits('upload_direct');
+
+                    $document = Document::create(
+                        $report + [
+                            'pdf_path' => $path,
+                            'uploaded_by' => $request->user()->id,
+                            'status' => 'open',
+                            'review_status' => $directUpload
+                                ? 'approved'
+                                : 'pending',
+                        ]
+                    );
+
+                    ActivityLog::record(
+                        'UPLOAD',
+                        'Laporan diunggah',
+                        $document->id
+                    );
+                }
+            });
+        } catch (\Throwable $exception) {
+            foreach ($storedPaths as $path) {
+                Storage::disk('local')->delete($path);
+            }
+
+            report($exception);
+
+            return back()
+                ->withInput()
+                ->withErrors([
+                    'reports' => 'Upload gagal; tidak ada laporan '
+                        .'dalam batch ini yang disimpan. '
+                        .'Silakan pilih file dan coba lagi.',
+                ]);
+        }
+
+        return redirect()
+            ->route('reports.mine')
+            ->with(
+                'success',
+                count($data['reports'])
+                    .' laporan berhasil diunggah.'
+            );
+    }
+
     public function index(Request $request)
     {
-        $categories = Category::where(
-            'is_hidden',
-            false
-        )->get();
-
-        $query = Document::with([
+        $query = Document::published()
+            ->with([
                 'category',
                 'uploader',
-                'likes'
-            ])
-            ->where('status', 'open')
-            ->whereHas('category', function ($q) {
-                $q->where('is_hidden', false);
-            });
+                'likes',
+            ]);
 
-        if ($request->filled('search')) {
-            $query->where(
-                'title',
-                'like',
-                '%' . trim($request->search) . '%'
-            );
+        $filters = [
+            'search' => 'title',
+            'tahun' => 'tahun',
+            'dosen' => 'dosen_pembimbing',
+            'angkatan' => 'angkatan_pembuat',
+        ];
+
+        foreach ($filters as $input => $column) {
+            if ($request->filled($input)) {
+                $query->where(
+                    $column,
+                    'like',
+                    '%'.trim($request->string($input)).'%'
+                );
+            }
         }
 
         if ($request->filled('category_id')) {
@@ -218,27 +196,16 @@ class DocumentController extends Controller
             );
         }
 
-        if ($request->filled('tahun')) {
+        if (
+            in_array(
+                $request->case_type,
+                ['Individu', 'Kelompok'],
+                true
+            )
+        ) {
             $query->where(
-                'tahun',
-                'like',
-                '%' . $request->tahun . '%'
-            );
-        }
-
-        if ($request->filled('dosen')) {
-            $query->where(
-                'dosen_pembimbing',
-                'like',
-                '%' . trim($request->dosen) . '%'
-            );
-        }
-
-        if ($request->filled('angkatan')) {
-            $query->where(
-                'angkatan_pembuat',
-                'like',
-                '%' . $request->angkatan . '%'
+                'case_type',
+                $request->case_type
             );
         }
 
@@ -247,44 +214,125 @@ class DocumentController extends Controller
             ->paginate(12)
             ->withQueryString();
 
+        $categories = Category::where(
+            'is_hidden',
+            false
+        )->get();
+
         return view(
             'student-catalog',
-            compact(
-                'documents',
-                'categories'
-            )
+            compact('documents', 'categories')
         );
     }
-    
+
+    public function show($id)
+    {
+        $document = Document::with([
+            'category',
+            'uploader',
+            'likes',
+            'bookmarks',
+        ])->findOrFail($id);
+
+        abort_unless(
+            $document->isPublished()
+                && auth()->user()->hasAccessToDocument(
+                    $document->id
+                ),
+            403,
+            'Laporan tidak tersedia atau izin baca tidak aktif.'
+        );
+
+        ActivityLog::record(
+            'READ_DOCUMENT',
+            'Membuka reader laporan',
+            $document->id
+        );
+
+        return view(
+            'student-document-detail',
+            compact('document')
+        );
+    }
+
     public function stream($filename)
     {
-        $user = Auth::user();
+        abort_unless(
+            basename($filename) === $filename,
+            404
+        );
 
-        $document = Document::where('pdf_path', 'pdf/' . $filename)
-            ->first();
+        $document = Document::where(
+            'pdf_path',
+            'pdf/'.$filename
+        )
+            ->orWhere(
+                'pdf_path',
+                'reports/'.$filename
+            )
+            ->firstOrFail();
 
-        if (!$document) {
-            abort(404, 'Dokumen tidak ditemukan.');
-        }
+        $user = auth()->user();
 
-        if (!$user->isAdmin() && !$user->isDosen()) {
-            if (!$user->hasAccessToDocument($document->id)) {
-                abort(
-                    403,
-                    'Masa akses Anda terhadap dokumen ini telah berakhir atau Anda tidak memiliki izin membaca.'
-                );
-            }
-        }
+        $canReview = $user->permits('review_uploads')
+            || $user->permits('manage_documents');
 
-        $path = resource_path('pdf/' . $filename);
+        $isOwner = $document->uploaded_by === $user->id
+            && $user->permits('upload');
 
-        if (!file_exists($path)) {
-            abort(404, 'File PDF tidak ditemukan.');
-        }
+        $canReadPublished = $document->isPublished()
+            && $user->hasAccessToDocument($document->id);
+
+        abort_unless(
+            $canReview || $isOwner || $canReadPublished,
+            403
+        );
+
+        $path = str_starts_with(
+            $document->pdf_path,
+            'reports/'
+        )
+            ? Storage::disk('local')->path($document->pdf_path)
+            : resource_path($document->pdf_path);
+
+        abort_unless(
+            is_file($path),
+            404,
+            'File PDF tidak ditemukan.'
+        );
 
         return response()->file($path, [
             'Content-Type' => 'application/pdf',
-            'Content-Disposition' => 'inline; filename="' . $filename . '"',
+            'Cache-Control' => 'private, no-store',
+            'X-Content-Type-Options' => 'nosniff',
         ]);
+    }
+
+    public function preview($id)
+    {
+        $document = Document::with([
+            'category',
+            'uploader',
+            'likes',
+            'bookmarks',
+        ])->findOrFail($id);
+
+        $user = auth()->user();
+
+        $canReview = $user->permits('review_uploads')
+            || $user->permits('manage_documents');
+
+        $isOwner = $document->uploaded_by === $user->id
+            && $user->permits('upload');
+
+        abort_unless(
+            $canReview || $isOwner,
+            403
+        );
+
+        return view(
+            'student-document-detail',
+            compact('document')
+        );
     }
 }

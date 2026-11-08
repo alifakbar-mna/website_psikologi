@@ -2,257 +2,165 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\DocumentRequest;
+use App\Models\ActivityLog;
 use App\Models\Document;
+use App\Models\DocumentRequest;
 use App\Models\TemporaryPermission;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 use Carbon\Carbon;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class DocumentRequestController extends Controller
 {
     public function studentIndex()
     {
-        $requests = DocumentRequest::with('document')
-            ->where('user_id', Auth::id())
-            ->latest()
-            ->get();
+        return view('student-requests', [
+            'requests' => DocumentRequest::with('document')
+                ->where('user_id', auth()->id())
+                ->latest()
+                ->get(),
 
-        $documents = Document::where('status', 'open')
-            ->latest()
-            ->get();
-
-        return view(
-            'student-requests',
-            compact('requests', 'documents')
-        );
+            'documents' => Document::published()
+                ->latest()
+                ->get(),
+        ]);
     }
 
-    public function store(Request $request)
+    public function store(Request $r)
     {
-        $request->validate([
-            'request_type' => [
-                'required',
-                'in:baca_sistem,baca_dokumen,upload,download',
-            ],
-
-            'reason' => [
-                'required',
-                'string',
-                'max:500',
+        $data = $r->validate([
+            'request_type' => 'required|in:baca_sistem,baca_dokumen,upload',
+            'reason' => 'required|string|max:500',
+            'document_id' => [
+                'nullable',
+                'required_if:request_type,baca_dokumen',
+                'integer',
+                'exists:documents,id',
             ],
         ]);
 
-        // Validasi Document ID untuk request tipe 'download' atau 'baca_dokumen'
-        if (in_array($request->request_type, ['download', 'baca_dokumen'])) {
-
-            $request->validate([
-                'document_id' => [
-                    'required',
-                    'integer',
-                    'exists:documents,id',
-                ],
-            ]);
-
-            $document = Document::where('id', $request->document_id)
-                ->where('status', 'open')
-                ->first();
-
-            if (!$document) {
-                return redirect()
-                    ->back()
-                    ->withErrors([
-                        'document_id' =>
-                            'Dokumen yang dipilih tidak tersedia atau sedang disembunyikan.',
-                    ])
-                    ->withInput();
-            }
-
+        if ($data['request_type'] === 'baca_dokumen') {
+            abort_unless(
+                Document::findOrFail($data['document_id'])->isPublished(),
+                422,
+                'Laporan tidak tersedia.'
+            );
         } else {
-            $request->merge([
-                'document_id' => null,
-            ]);
+            $data['document_id'] = null;
         }
 
-        DocumentRequest::create([
-            'user_id' => Auth::id(),
-
-            'document_id' =>
-                in_array($request->request_type, ['download', 'baca_dokumen'])
-                    ? $request->document_id
-                    : null,
-
-            'request_type' => $request->request_type,
-
-            'reason' => $request->reason,
-
+        DocumentRequest::create($data + [
+            'user_id' => $r->user()->id,
             'status' => 'pending',
-
-            'expired_at' => null,
         ]);
 
-        return redirect()
-            ->back()
-            ->with(
-                'success',
-                'Permohonan berhasil dikirim. Menunggu persetujuan Dosen/Admin.'
-            );
+        return back()->with(
+            'success',
+            'Permohonan dikirim. Menunggu persetujuan.'
+        );
     }
 
     public function lecturerIndex()
     {
-        $pendingRequests = DocumentRequest::with([
-                'user',
-                'document',
-            ])
-            ->where('status', 'pending')
-            ->latest()
-            ->get();
-
-        $processedRequests = DocumentRequest::with([
-                'user',
-                'document',
-            ])
-            ->whereIn(
-                'status',
-                ['approved', 'rejected']
-            )
-            ->latest()
-            ->take(15)
-            ->get();
-
-        return view(
-            'lecturer-requests',
-            compact(
-                'pendingRequests',
-                'processedRequests'
-            )
-        );
+        return view('lecturer-requests', [
+            'pendingRequests' => DocumentRequest::with(['user', 'document'])
+                ->where('status', 'pending')
+                ->latest()
+                ->get(),
+        ]);
     }
 
-    public function process(Request $request, $id)
+    public function process(Request $r, $id)
     {
-        $request->validate([
-            'status' => [
-                'required',
-                'in:approved,rejected',
-            ],
-
+        $data = $r->validate([
+            'status' => 'required|in:approved,rejected',
             'reject_reason' => [
-                'required_if:status,rejected',
                 'nullable',
+                'required_if:status,rejected',
                 'string',
                 'max:1000',
             ],
-
             'expired_date' => [
-                'required_if:status,approved',
                 'nullable',
-                'date',
+                'required_if:status,approved',
+                'date_format:Y-m-d',
             ],
-
             'expired_time' => [
-                'required_if:status,approved',
                 'nullable',
+                'required_if:status,approved',
                 'date_format:H:i',
             ],
         ]);
 
-        $docRequest = DocumentRequest::findOrFail($id);
+        $expires = null;
 
-        if ($request->status === 'rejected') {
-            $docRequest->update([
-                'status' => 'rejected',
-                'reject_reason' => $request->reject_reason,
-                'action_by' => Auth::id(),
-                'expired_at' => null,
+        if ($data['status'] === 'approved') {
+            $expires = Carbon::createFromFormat(
+                'Y-m-d H:i',
+                $data['expired_date'].' '.$data['expired_time'],
+                config('app.timezone')
+            );
+
+            if ($expires->isPast()) {
+                return back()->withErrors([
+                    'expired_date' => 'Waktu berakhir harus setelah sekarang.',
+                ]);
+            }
+        }
+
+        DB::transaction(function () use ($id, $r, $data, $expires) {
+            $req = DocumentRequest::lockForUpdate()->findOrFail($id);
+
+            abort_unless(
+                $req->status === 'pending',
+                409,
+                'Permohonan sudah diproses.'
+            );
+
+            abort_unless(
+                in_array(
+                    $req->request_type,
+                    ['baca_sistem', 'baca_dokumen', 'upload'],
+                    true
+                ),
+                422
+            );
+
+            if ($req->document_id && $data['status'] === 'approved') {
+                abort_unless($req->document?->isPublished(), 422);
+            }
+
+            $req->update([
+                'status' => $data['status'],
+                'reject_reason' => $data['status'] === 'rejected'
+                    ? $data['reject_reason']
+                    : null,
+                'expired_at' => $expires,
+                'action_by' => $r->user()->id,
             ]);
 
-            return redirect()
-                ->back()
-                ->with(
-                    'success',
-                    'Permohonan berhasil ditolak.'
-                );
-        }
+            if ($data['status'] === 'approved') {
+                TemporaryPermission::create([
+                    'user_id' => $req->user_id,
+                    'document_id' => $req->document_id,
+                    'can_read' => in_array(
+                        $req->request_type,
+                        ['baca_sistem', 'baca_dokumen'],
+                        true
+                    ),
+                    'can_upload' => $req->request_type === 'upload',
+                    'expired_at' => $expires,
+                    'granted_by' => $r->user()->id,
+                ]);
+            }
 
-        $expiredAt = Carbon::createFromFormat(
-            'Y-m-d H:i',
-            $request->expired_date . ' ' . $request->expired_time,
-            config('app.timezone')
-        );
-
-        if ($expiredAt->isPast()) {
-            return redirect()
-                ->back()
-                ->withErrors([
-                    'expired_date' =>
-                        'Waktu berakhir harus setelah waktu sekarang.',
-                ])
-                ->withInput();
-        }
-
-        $docRequest->update([
-            'status' => 'approved',
-            'reject_reason' => null,
-            'action_by' => Auth::id(),
-            'expired_at' => $expiredAt,
-        ]);
-
-        $permissionQuery = TemporaryPermission::where(
-            'user_id',
-            $docRequest->user_id
-        );
-
-        if ($docRequest->document_id) {
-            $permissionQuery->where(
-                'document_id',
-                $docRequest->document_id
+            ActivityLog::record(
+                'PROCESS_ACCESS',
+                'Permohonan '.$data['status'],
+                $req->document_id
             );
-        } else {
-            $permissionQuery->whereNull(
-                'document_id'
-            );
-        }
+        });
 
-        $permissionQuery->delete();
-
-        TemporaryPermission::create([
-            'user_id' =>
-                $docRequest->user_id,
-
-            'document_id' =>
-                $docRequest->document_id,
-
-            'can_read' =>
-                in_array(
-                    $docRequest->request_type,
-                    [
-                        'baca_sistem',
-                        'baca_dokumen',
-                        'download',
-                    ]
-                ),
-
-            'can_download' =>
-                $docRequest->request_type === 'download',
-
-            'can_upload' =>
-                $docRequest->request_type === 'upload',
-
-            'expired_at' =>
-                $expiredAt,
-
-            'granted_by' =>
-                Auth::id(),
-        ]);
-
-        return redirect()
-            ->back()
-            ->with(
-                'success',
-                'Akses berhasil diberikan hingga ' .
-                $expiredAt->format('d M Y, H:i')
-            );
+        return back()->with('success', 'Permohonan berhasil diproses.');
     }
 }
